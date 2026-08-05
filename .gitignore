@@ -1,0 +1,28 @@
+# Corpora never enter this repo. The whole point of coroner is that the methods
+# are public and the writing is not: someone else should be able to clone this,
+# point it at their own exports, and get the same behaviour.
+#
+# The "/*" form rather than "/source/" is deliberate. Git will not re-include a
+# file whose parent directory is excluded, so ignoring the directory outright
+# would take the .gitkeep with it and the directories would not survive a clone.
+# Ignoring the *contents* leaves room for the one tracked file that holds each
+# directory open.
+/source/*
+!/source/.gitkeep
+/digested/*
+!/digested/.gitkeep
+
+# The live config, same reasoning as hecato: a local build drops the binary at
+# the repo root and would otherwise pick this up and show the tree dirty.
+/coroner.yaml
+
+# Build output
+/coroner
+/coroner.exe
+/app.log
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
