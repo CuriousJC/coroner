@@ -122,11 +122,34 @@ func TestCaseSensitivityFollowsTheBuildTarget(t *testing.T) {
 	}
 }
 
-func TestBackslashesAreNormalised(t *testing.T) {
+// TestBackslashesFollowTheBuildTarget pins behaviour that is correctly different
+// per platform, and that it is tempting to get wrong in exactly one direction.
+//
+// filepath.ToSlash rewrites separators on Windows and is a no-op on Linux, where
+// a backslash is an ordinary, legal character in a filename rather than a
+// separator. So `posts\drafts` is a path on Windows and a single oddly-named
+// directory on Linux, and the matcher is right to treat them differently.
+//
+// Asserting the Windows answer unconditionally is the mistake this test used to
+// make. It passed locally and failed in CI, which is the whole reason the race
+// detector and the Linux build live there.
+func TestBackslashesFollowTheBuildTarget(t *testing.T) {
 	m := New([]string{"posts/drafts/"})
 
-	if !m.MatchDir(`posts\drafts`) {
-		t.Error("a Windows-style path did not match a forward-slash pattern")
+	got := m.MatchDir(`posts\drafts`)
+	want := runtime.GOOS == "windows"
+
+	if got != want {
+		if want {
+			t.Errorf("a Windows-style path did not match a forward-slash pattern")
+			return
+		}
+		t.Errorf("a backslash was treated as a separator on %s, where it is a legal filename character", runtime.GOOS)
+	}
+
+	// Forward slashes are the portable form and must match everywhere.
+	if !m.MatchDir("posts/drafts") {
+		t.Error("a forward-slash path did not match its own pattern")
 	}
 }
 
