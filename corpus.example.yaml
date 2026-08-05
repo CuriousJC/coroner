@@ -1,0 +1,35 @@
+# coroner corpus manifest
+#
+# This file says what the export sitting beside it is. Coroner never guesses
+# a format: the guess would depend on which file the walk reached first, and
+# a digest that depends on walk order is not reproducible.
+
+# Which parser reads this export.
+#   facebook  a Facebook "Download your information" export
+#   substack  a Substack export: posts.csv plus posts/*.html
+#   html      loose HTML files
+#   text      loose .txt or .md files
+type: html
+
+# This corpus's stable identity. It is part of every document ID and it names
+# the files this corpus writes into the digested directory, so changing it
+# means re-digesting from scratch. Lowercase letters, digits, - and _.
+name: example
+
+# Provenance, used when the export itself does not carry it.
+# author: "Your Name"
+# title: "What this body of work is"
+# notes: "Anything you want to remember about this export. Coroner ignores it."
+
+# Narrow which files the parser is offered, as globs relative to this
+# directory. Empty means the parser's own default, which is usually right.
+# include:
+#   - "posts/**/*.html"
+
+# Prune what you do not want walked at all. A trailing / skips the whole
+# directory rather than filtering its contents one file at a time; on an
+# export whose media folder holds 40,000 images, that is the difference
+# that matters. Images, video and web scaffolding are excluded already.
+# exclude:
+#   - "comments/"
+#   - "*.json.bak"

@@ -1,0 +1,40 @@
+# coroner config
+#
+# Everything here is optional, and every value can be overridden by typing
+# the equivalent flag. Precedence is: explicit flag, then this file, then
+# the built-in default.
+
+defaults:
+  # Where your source directories live. Each one holds an export and a
+  # corpus.yaml describing it. `coroner digest` with no -source digests
+  # every corpus found under here.
+  source: source
+
+  # Where the searchable corpus is written. One shared directory: every
+  # source digests into it and search reads across all of them at once.
+  digested: digested
+
+  # How many results a search returns.
+  # hits: 10
+
+  # How many files are parsed concurrently while digesting.
+  # workers: 8
+
+  # verbose: false
+
+embed:
+  # Coroner embeds locally, through ollama, so your writing never leaves
+  # the machine. There is no hosted fallback and no keyword-only fallback:
+  # if ollama is not answering, digest and search both stop and say so.
+  #
+  #   ollama serve
+  #   ollama pull nomic-embed-text
+  #
+  # base_url: http://localhost:11434
+
+  # The embedding model. Changing this invalidates every vector already
+  # stored: embeddings from two different models are not comparable, so
+  # coroner refuses to search a corpus built with a different one rather
+  # than quietly return nonsense. Changing it means re-digesting
+  # everything.
+  # model: nomic-embed-text

@@ -1,0 +1,13 @@
+# Keep Go files LF in the working tree as well as in the blob.
+#
+# Without this, core.autocrlf=true checks them out CRLF on Windows and `gofmt -l`
+# then lists every file in the repo, because gofmt objects to the carriage
+# returns. That is a false positive nobody should have to learn to ignore, and
+# hecato carries it as a documented annoyance rather than a fix. This is the fix.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+Makefile text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
