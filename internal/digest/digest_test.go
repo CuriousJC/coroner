@@ -306,7 +306,7 @@ func TestDigestUnknownTypeFails(t *testing.T) {
 
 func TestDigestPendingParserFailsEarly(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "corpus.yaml"), []byte("type: facebook\nname: fb\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "corpus.yaml"), []byte("type: substack\nname: sub\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 

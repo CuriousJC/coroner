@@ -60,14 +60,27 @@ type Parser interface {
 // than shared, so that whatever Prepare caches belongs to one digest and cannot
 // leak between corpora.
 var constructors = map[string]func() Parser{
-	"text": func() Parser { return &textParser{} },
-	"html": func() Parser { return &htmlParser{} },
-	"facebook": func() Parser {
-		return &pendingParser{format: "facebook", waitingFor: "a Facebook \"Download your information\" export"}
-	},
+	"text":     func() Parser { return &textParser{} },
+	"html":     func() Parser { return &htmlParser{} },
+	"facebook": func() Parser { return &facebookParser{} },
 	"substack": func() Parser {
 		return &pendingParser{format: "substack", waitingFor: "a Substack export zip, expanded"}
 	},
+}
+
+// RecordCounter is implemented by parsers whose files hold many records, so a
+// digest can say how much of an export contained no writing.
+//
+// Optional, because it only means something for those formats. A directory of
+// HTML files maps one file to one document, and the file counts already say
+// everything there is to say. A Facebook export is a single JSON array holding
+// thousands of records, most of which may legitimately be photographs with no
+// text -- and without this, "one file parsed, 5,653 documents" gives no way to
+// tell that from a parser that has silently started dropping things.
+type RecordCounter interface {
+	// Records reports how many records were read and how many produced no
+	// document.
+	Records() (seen, empty int)
 }
 
 // New builds the parser for a manifest type.

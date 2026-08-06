@@ -34,7 +34,12 @@ func Print() {
 
 	section("Looking around", []example{
 		{"coroner sources", "what has been digested, and when"},
+		{"coroner stats", "counts, date histogram, vocabulary"},
+		{"coroner stats -sample=10", "read a few documents spread through a corpus"},
+		{"coroner stats -format=json", "the same numbers, machine-readable"},
 		{"coroner version", "build metadata"},
+		{"", "stats is how you check a corpus parsed properly: a gap in the year"},
+		{"", "histogram or a suspiciously tight word count is a parser problem"},
 	})
 
 	corlog.Detail(true, "Searching needs ollama running, because that is what turns a query into a")

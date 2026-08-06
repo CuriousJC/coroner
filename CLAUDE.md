@@ -24,6 +24,8 @@ coroner digest
 coroner search "choice"
 coroner search "branching logic" -hits=25 -format=json
 coroner sources
+coroner stats
+coroner stats -sample=10
 ```
 
 A single test: `go test ./internal/doc -run TestSplitIsDeterministic -v`.
@@ -55,6 +57,8 @@ Digest and search are two pipelines that meet at the digested directory.
 
 **Search:** `cmd/coroner` → `internal/store` (load all) → `internal/search` (BM25 + vectors + RRF) → results.
 
+**Stats:** `internal/stats` describes a digested corpus — counts, date histogram, length spreads, vocabulary. It exists because a corpus is not something you can eyeball: five thousand documents you cannot read are indistinguishable from five thousand that parsed badly, and parser failures are quiet. Text truncated at the first newline shows up as a suspiciously tight word-count spread; a dropped year shows up as a gap in the histogram; boilerplate shows up as a low hapax share. `coroner stats -sample=N` prints documents spread evenly through the corpus rather than from the front, since documents are sorted by a hash and the first few are a fixed arbitrary slice that would hide a parser failing on later records.
+
 ### Subcommands, not `-method`
 
 The one substantial departure from hecato. Hecato's `-method` switch works because every method takes the same flags; `digest` and `search` genuinely do not. Each subcommand builds its own `flag.FlagSet`, and `commonFlags` holds what they share.
@@ -75,9 +79,20 @@ A source directory holds one export plus a `corpus.yaml` saying what it is. Coro
 
 `parse.Parser` is two phases: `Prepare` runs once and is where a format reads its sidecar metadata (Substack's `posts.csv`); `ParseFile` is called concurrently and must be read-only afterwards. Adding a format means a new file in `internal/parse`, an entry in `constructors`, and a line in the manifest starter's type list.
 
-`text` and `html` are implemented. `facebook` and `substack` are **registered but pending** — `pendingParser` returns a clear error saying the parser is not written yet. Registered rather than absent on purpose: a manifest saying `type: facebook` is not a typo and should not be told it is one. They are waiting on real exports because writing a parser against a documented format rather than real bytes is how you get one that is confidently wrong about encoding, and encoding errors quietly corrupt every document ID in a corpus.
+`text`, `html` and `facebook` are implemented. `substack` is **registered but pending** — `pendingParser` returns a clear error saying it is not written yet. Registered rather than absent on purpose: a manifest saying `type: substack` is not a typo and should not be told it is one. It waits on a real export, because writing a parser against a documented format rather than real bytes is how you get one that is confidently wrong about encoding, and encoding errors quietly corrupt every document ID in a corpus.
 
-When the Facebook parser is written, note that its export is famously double-encoded — UTF-8 bytes re-read as latin-1, so `don't` arrives as `donâ€™t`. That must be repaired in the parser, before `doc.New`.
+`parse.RecordCounter` is an optional interface for parsers whose files hold many records. Only `facebook` implements it. It exists because "1 file parsed, 5,651 documents" gives no way to tell a photo-heavy export from a parser that has silently started dropping things.
+
+### What the Facebook export actually looks like
+
+Written against a real 8,195-record export, and these numbers are why the parser does what it does. Do not "simplify" any of them without re-measuring.
+
+- **The `title` field is chrome**, not a title: "Justin Crosby updated his status." repeated across thousands of records. Documents are given **no title at all**. Since `doc.Indexed` prepends the title to every chunk before embedding, using it would inject identical boilerplate into every vector in the corpus and flatten exactly the distinctions search exists to find. `TestFacebookLeavesTitleEmpty` guards this.
+- **There is no post identifier anywhere.** Identity is built from `timestamp` plus a hash of the text. Measured: timestamps alone collide 327 times (batch uploads share a second), text alone collides 31 times (people repeat themselves), the two together collide twice — and those two are genuinely the same post recorded twice, which `dedupeIDs` drops and reports.
+- **Photo captions are real writing.** 1,148 media descriptions, all hand-written, none of them Facebook's generated alt text. But 905 of those were byte-identical to the post they hung under, because Facebook copies a caption into both places, so they are deduplicated before being appended. Skipping captions entirely would lose documents; appending blind would double term frequencies inside them.
+- **The export is double-encoded**: UTF-8 bytes re-read as latin-1, so `don't` arrives as `donâ€™t` and an emoji as four accented letters. `repairMojibake` undoes it, and runs *before* `doc.New` because every document ID derives from the text. Measured on the real export: 1,200 strings repaired, 5,595 untouched, zero mojibake markers surviving. Its guards matter more than its transformation — it refuses unless the result is valid UTF-8, the input had a byte above ASCII, and the result contains a multi-byte character, so genuine latin-1 text and plain ASCII pass through unharmed.
+- **Only the posts files are read.** `your_posts*.json`, globbed because a large export splits into `_1`, `_2`. `posts_on_other_pages_and_profiles.json` looks promising and holds no post text at all; `edits_you_made_to_posts.json` is edit history that would duplicate everything.
+- **31% of records hold no text.** Photos and bare link shares. That is normal, and the reason the quiet-corpus warning threshold is 80% rather than something that would fire here.
 
 ### Document identity
 
@@ -163,8 +178,9 @@ Present as written — don't treat them as bugs to fix unless asked:
 
 - An HTML document whose `<h1>` repeats its title shows that title twice: once as the result heading, once at the head of the snippet. The `h1` is genuinely part of the article body, and stripping it heuristically risks removing real text.
 - `Chunk.Start` and `Chunk.End` bracket the untrimmed span, while `Chunk.Text` is trimmed. Offsets locate the chunk; they are not byte-exact against `Text`.
-- `digest` reports files that failed to parse but not files that parsed to nothing. An export full of image-only posts looks the same as a broken parser.
 - `-depth` is exposed on `search` but there is no evaluation set to tune it against, so the default is the only value anyone has a reason to use.
+- Facebook posts carry no URL. The export has `external_context.url` for link shares, but that is the link that was shared rather than a permalink to the post, and putting it in `Document.URL` would imply the wrong thing.
+- Search results show no title line for sources that have no titles. Deliberate — see the comment in `printResults` — but it does mean Facebook results look different from HTML ones.
 
 ## Roadmap
 

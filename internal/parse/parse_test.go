@@ -50,8 +50,11 @@ func TestImplementedDistinguishesPendingParsers(t *testing.T) {
 	if !Implemented("text") {
 		t.Error("text should be implemented")
 	}
-	if Implemented("facebook") {
-		t.Error("facebook is not written yet and should not claim to be")
+	if !Implemented("facebook") {
+		t.Error("facebook should be implemented")
+	}
+	if Implemented("substack") {
+		t.Error("substack is not written yet and should not claim to be")
 	}
 	if Implemented("nonsense") {
 		t.Error("an unregistered type reported as implemented")
@@ -62,9 +65,9 @@ func TestImplementedDistinguishesPendingParsers(t *testing.T) {
 // coroner knows about but cannot read yet says so, rather than being told the
 // type is unknown.
 func TestPendingParserIsAnHonestError(t *testing.T) {
-	p, err := New("facebook")
+	p, err := New("substack")
 	if err != nil {
-		t.Fatalf("facebook should be a registered type: %v", err)
+		t.Fatalf("substack should be a registered type: %v", err)
 	}
 
 	err = p.Prepare(Source{})
