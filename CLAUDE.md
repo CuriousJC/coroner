@@ -57,6 +57,14 @@ Digest and search are two pipelines that meet at the digested directory.
 
 **Search:** `cmd/coroner` → `internal/store` (load all) → `internal/search` (BM25 + vectors + RRF) → results.
 
+**Links:** `internal/links` renders the outbound links an export recorded, via the optional `parse.LinkLister` interface. Only `facebook` implements it.
+
+Links are deliberately **not documents**. A URL tokenises into fragments that mean nothing to a reader and everything to a lexical index — `https`, `www`, `com`, a hex tracking parameter — and there are thousands of them, so indexing them would degrade every search in order to make one kind of lookup work. What makes the artefact worth reading is not the URLs but the commentary written alongside them.
+
+`coroner links` runs through `digest.ParseOnly`, which shares the walk and worker pool with `Run` but discards the documents and embeds nothing — so it works with ollama absent. Sharing that path is deliberate: a second route through the same export could drift out of step with the first.
+
+Two measured details: the export repeats one `external_context` across a record's attachments, which accounted for 317 of 2,848 entries, so the same URL at the same second is deduplicated — but the same URL at a *different* time is a genuine re-share and is kept, because when you shared something again is what you would be reading the file to find out. And `t.co` is a third of all links: Twitter cross-posts, opaque and mostly dead, but they carry commentary so they are not dropped.
+
 **Stats:** `internal/stats` describes a digested corpus — counts, date histogram, length spreads, vocabulary. It exists because a corpus is not something you can eyeball: five thousand documents you cannot read are indistinguishable from five thousand that parsed badly, and parser failures are quiet. Text truncated at the first newline shows up as a suspiciously tight word-count spread; a dropped year shows up as a gap in the histogram; boilerplate shows up as a low hapax share. `coroner stats -sample=N` prints documents spread evenly through the corpus rather than from the front, since documents are sorted by a hash and the first few are a fixed arbitrary slice that would hide a parser failing on later records.
 
 ### Subcommands, not `-method`

@@ -9,6 +9,7 @@ main executable for coroner
 	coroner search "branching logic" -hits=25 -format=json
 	coroner sources
 	coroner stats -sample=10
+	coroner links -source=source/facebook_posts
 
 // For creating an executable:::
 
@@ -41,6 +42,7 @@ import (
 	"github.com/curiousjc/coroner/internal/doc"
 	"github.com/curiousjc/coroner/internal/embed"
 	"github.com/curiousjc/coroner/internal/examples"
+	"github.com/curiousjc/coroner/internal/links"
 	"github.com/curiousjc/coroner/internal/parse"
 	"github.com/curiousjc/coroner/internal/search"
 	"github.com/curiousjc/coroner/internal/stats"
@@ -91,6 +93,8 @@ func main() {
 		run(cmdSearch(args))
 	case "sources":
 		run(cmdSources(args))
+	case "links":
+		run(cmdLinks(args))
 	case "stats":
 		run(cmdStats(args))
 	case "initsource":
@@ -104,7 +108,7 @@ func main() {
 	default:
 		corlog.Heading(true, "coroner %s", version.Version)
 		corlog.Error(true, "Unknown command %q.", cmd)
-		corlog.Detail(true, "Commands: digest, search, sources, stats, initsource, initconfig, version, examples")
+		corlog.Detail(true, "Commands: digest, search, sources, stats, links, initsource, initconfig, version, examples")
 		corlog.Detail(true, "Try `coroner examples` for worked usage.")
 		os.Exit(1)
 	}
@@ -812,6 +816,123 @@ func cmdSources(args []string) error {
 		plural(len(man.Sources), "corpus", "corpora"))
 
 	return nil
+}
+
+// ---------------------------------------------------------------- links
+
+func cmdLinks(args []string) error {
+	c := newFlagSet("links")
+	source := c.fs.String("source", "", "REQUIRED: the source directory to read.")
+	out := c.fs.String("out", "links.md", "Where to write. Use - for standard output.")
+	format := c.fs.String("format", "md", "Output format: md or json.")
+	topDomains := c.fs.Int("domains", 25, "How many domains to list in the summary.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+
+	if *format != "md" && *format != "json" {
+		return fmt.Errorf("unknown format %q; use md or json", *format)
+	}
+	if *source == "" {
+		return fmt.Errorf("no -source given, so there is nothing to read.\n" +
+			"    coroner links -source=source/facebook_posts")
+	}
+
+	// Reads and parses the export but embeds nothing, so this works without
+	// ollama running. Links are not part of the corpus and never reach it.
+	man, parser, err := loadParser(*source)
+	if err != nil {
+		return err
+	}
+
+	lister, ok := parser.(parse.LinkLister)
+	if !ok {
+		return fmt.Errorf("the %s parser does not record outbound links.\n"+
+			"  Only formats that keep links as their own field can produce this;\n"+
+			"  links inside a page's markup are part of the writing, not a list", man.Type)
+	}
+
+	if *format == "md" && *out != "-" {
+		corlog.Heading(true, "coroner %s", version.Version)
+		corlog.Info(true, "")
+		corlog.Field(true, "Reading", filepath.ToSlash(*source))
+	}
+
+	if err := parseForLinks(*source, man, parser); err != nil {
+		return err
+	}
+
+	dropped := 0
+	if d, ok := parser.(interface{ DroppedLinks() int }); ok {
+		dropped = d.DroppedLinks()
+	}
+
+	rep := links.Build(man.Name, lister.Links(), dropped)
+
+	var rendered []byte
+	if *format == "json" {
+		rendered, err = json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			return err
+		}
+		rendered = append(rendered, '\n')
+	} else {
+		rendered = []byte(rep.Markdown(*topDomains))
+	}
+
+	if *out == "-" {
+		_, err := os.Stdout.Write(rendered)
+		return err
+	}
+
+	if err := os.WriteFile(*out, rendered, 0644); err != nil {
+		return err
+	}
+
+	corlog.Info(true, "")
+	corlog.Success(true, "Wrote %s to %s", plural(len(rep.Links), "link", "links"), filepath.ToSlash(*out))
+	if rep.Unique != len(rep.Links) {
+		corlog.Detail(true, "  %s distinct URLs; the rest were shared more than once", comma(rep.Unique))
+	}
+	if rep.Dropped > 0 {
+		corlog.Detail(true, "  %s recorded links pointed nowhere usable", comma(rep.Dropped))
+	}
+	if len(rep.Domains) > 0 {
+		corlog.Detail(true, "  most shared: %s (%s)", rep.Domains[0].Domain, comma(rep.Domains[0].Count))
+	}
+
+	return nil
+}
+
+// loadParser resolves a source directory to its manifest and a fresh parser.
+func loadParser(dir string) (*corpus.Manifest, parse.Parser, error) {
+	man, err := corpus.Load(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := man.Validate(parse.Types()); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", filepath.Join(dir, corpus.FileName), err)
+	}
+
+	parser, err := parse.New(man.Type)
+	if err != nil {
+		return nil, nil, err
+	}
+	return man, parser, nil
+}
+
+// parseForLinks runs the parser purely for its side effects, discarding the
+// documents. Wasteful in principle and irrelevant in practice: parsing an
+// 8,000-record export takes under a second, and the alternative is a second code
+// path through the same JSON that could drift out of step with the first.
+func parseForLinks(dir string, man *corpus.Manifest, parser parse.Parser) error {
+	src := parse.Source{Dir: dir, Name: man.Name, Type: man.Type, Author: man.Author}
+
+	if err := parser.Prepare(src); err != nil {
+		return err
+	}
+	return digest.ParseOnly(context.Background(), dir, man, parser, src)
 }
 
 // ---------------------------------------------------------------- stats

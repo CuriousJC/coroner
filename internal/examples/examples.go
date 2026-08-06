@@ -32,6 +32,15 @@ func Print() {
 		{"coroner search \"choice\" -format=json", "machine-readable, for piping somewhere else"},
 	})
 
+	section("Links", []example{
+		{"coroner links -source=source/facebook", "write links.md: every link you shared, with what you said"},
+		{"coroner links -source=source/facebook -out=-", "to standard output instead"},
+		{"coroner links -source=source/facebook -format=json", "machine-readable"},
+		{"", "links are never part of the corpus: a URL tokenises into noise that"},
+		{"", "would degrade every search. This is a separate thing to read."},
+		{"", "It needs no ollama, since nothing is embedded."},
+	})
+
 	section("Looking around", []example{
 		{"coroner sources", "what has been digested, and when"},
 		{"coroner stats", "counts, date histogram, vocabulary"},

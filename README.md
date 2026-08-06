@@ -43,7 +43,16 @@ coroner search "the cost of certainty" -format=json
 coroner sources     # what has been digested
 coroner stats       # counts, date histogram, vocabulary
 coroner examples    # worked usage for everything
+
+# Every link you shared, with what you said about it
+coroner links -source=source/facebook
 ```
+
+## Links are not part of the corpus
+
+`coroner links` writes a browsable Markdown file — links grouped by year, newest first, each with the commentary you wrote when sharing it, plus a summary of which sites you shared most.
+
+They are kept out of the searchable corpus on purpose. A URL tokenises into fragments that mean nothing to a reader and everything to a keyword index — `https`, `www`, `com`, a tracking parameter — and there are thousands of them, so indexing them would degrade every search to make one kind of lookup possible. The artefact stands on its own instead, and needs no ollama since nothing is embedded.
 
 ## Checking a corpus parsed properly
 

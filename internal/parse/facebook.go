@@ -3,7 +3,10 @@ package parse
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
@@ -26,6 +29,14 @@ type facebookParser struct {
 	// contained no writing. Atomic because ParseFile runs concurrently.
 	records atomic.Int64
 	empty   atomic.Int64
+
+	// Links are collected as a side effect of parsing but never become
+	// documents. See parse.Link for why. Guarded rather than atomic because a
+	// slice cannot be appended to lock-free, and an export splits into few
+	// enough files that the contention is nothing.
+	mu      sync.Mutex
+	links   []Link
+	dropped int
 }
 
 func (p *facebookParser) Include() []string {
@@ -59,6 +70,10 @@ func (p *facebookParser) ParseFile(src Source, rel string, data []byte) ([]doc.D
 
 	for _, r := range records {
 		p.records.Add(1)
+
+		// Before the empty check, because a bare link share with no commentary
+		// produces no document and is still a link worth keeping.
+		p.collectLinks(r, rel)
 
 		text := r.text()
 		if text == "" {
@@ -112,7 +127,14 @@ type fbAttachment struct {
 }
 
 type fbAttachmentData struct {
-	Media *fbMedia `json:"media"`
+	Media           *fbMedia           `json:"media"`
+	ExternalContext *fbExternalContext `json:"external_context"`
+}
+
+type fbExternalContext struct {
+	URL    string `json:"url"`
+	Name   string `json:"name"`
+	Source string `json:"source"`
 }
 
 type fbMedia struct {
@@ -154,6 +176,136 @@ func (r fbRecord) text() string {
 	}
 
 	return strings.Join(parts, "\n\n")
+}
+
+// collectLinks pulls outbound links off a record.
+//
+// The commentary is the point. A URL on its own is a bookmark; a URL with what
+// you said when you shared it is a note to yourself, and on this export 2,985
+// records carry one.
+func (p *facebookParser) collectLinks(r fbRecord, rel string) {
+	comment := repairMojibake(strings.TrimSpace(r.postOnly()))
+
+	var found []Link
+	dropped := 0
+
+	for _, a := range r.Attachments {
+		for _, ad := range a.Data {
+			ec := ad.ExternalContext
+			if ec == nil {
+				continue
+			}
+
+			raw := strings.TrimSpace(ec.URL)
+			if !usableURL(raw) {
+				// The export writes "/" and other fragments where a link has
+				// expired or was never really external. Counted rather than
+				// silently discarded, so the artefact can say how much it left
+				// out.
+				if raw != "" {
+					dropped++
+				}
+				continue
+			}
+
+			found = append(found, Link{
+				URL:       raw,
+				Title:     repairMojibake(strings.TrimSpace(ec.Name)),
+				Comment:   comment,
+				Published: time.Unix(r.Timestamp, 0).UTC(),
+				File:      rel,
+			})
+		}
+	}
+
+	if len(found) == 0 && dropped == 0 {
+		return
+	}
+
+	p.mu.Lock()
+	p.links = append(p.links, found...)
+	p.dropped += dropped
+	p.mu.Unlock()
+}
+
+// postOnly is the record's own commentary, without the photo captions that
+// text() folds in. A caption belongs to an image, not to a link.
+func (r fbRecord) postOnly() string {
+	for _, d := range r.Data {
+		if s := strings.TrimSpace(d.Post); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// usableURL keeps only links that actually point somewhere off Facebook.
+func usableURL(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	return u.Host != ""
+}
+
+// Links returns every link found, oldest first and deduplicated.
+//
+// Sorted rather than returned in parse order, because parse order depends on
+// which worker finished first, and the artefact this feeds is regenerated often
+// enough that it needs to diff cleanly.
+//
+// The same URL at the same second is one share recorded more than once: the
+// export repeats an external_context across a record's attachments, and on a
+// real export that accounted for 317 of 2,848 entries. The same URL at a
+// *different* time is a genuine re-share and is kept, because when you shared
+// something again is exactly the sort of thing you would be reading this file to
+// find out.
+func (p *facebookParser) Links() []Link {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]Link, len(p.links))
+	copy(out, p.links)
+
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Published.Equal(out[j].Published) {
+			return out[i].Published.Before(out[j].Published)
+		}
+		return out[i].URL < out[j].URL
+	})
+
+	type key struct {
+		url string
+		at  int64
+	}
+	seen := make(map[key]bool, len(out))
+
+	kept := out[:0]
+	for _, l := range out {
+		k := key{l.URL, l.Published.Unix()}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		kept = append(kept, l)
+	}
+
+	return kept
+}
+
+// DroppedLinks reports how many recorded links were not usable, so the artefact
+// can account for the gap between what the export holds and what was kept.
+func (p *facebookParser) DroppedLinks() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.dropped
 }
 
 // repairMojibake undoes the encoding bug in Facebook's export: text that was

@@ -217,6 +217,27 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	return rep, nil
 }
 
+// ParseOnly walks a source and runs its parser, discarding the documents.
+//
+// It exists for the artefacts that fall out of parsing rather than being part of
+// the corpus -- outbound links, so far. Those need the parse but neither an
+// embedder nor a digested corpus, which is what makes `coroner links` work with
+// ollama absent.
+//
+// Sharing the walk and the worker pool with Run is the point. A second path
+// through the same export would be free to drift out of step with the first, and
+// the two disagreeing about what an export contains is exactly the kind of quiet
+// wrongness this codebase spends its effort avoiding.
+func ParseOnly(ctx context.Context, dir string, man *corpus.Manifest, parser parse.Parser, src parse.Source) error {
+	files, err := enumerate(dir, man, parser)
+	if err != nil {
+		return err
+	}
+
+	parseAll(ctx, src, parser, Options{SourceDir: dir}, files, &Report{})
+	return nil
+}
+
 // enumerate lists the files the parser should be offered, in sorted order.
 func enumerate(root string, man *corpus.Manifest, parser parse.Parser) ([]string, error) {
 	exclude := man.Matcher()

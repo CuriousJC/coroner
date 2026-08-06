@@ -305,3 +305,184 @@ func TestFacebookRepairsBeforeHashing(t *testing.T) {
 		t.Errorf("record text = %q, want %q", got, "didn’t")
 	}
 }
+
+// --- link extraction
+
+func TestFacebookCollectsLinksWithCommentary(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[{"timestamp": 1600000000, "title": "A Writer shared a link.",
+	  "data": [{"post": "This is worth reading."}],
+	  "attachments": [{"data": [{"external_context": {"url": "https://example.com/a", "name": "A Title"}}]}]}]`
+
+	if _, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := p.Links()
+	if len(got) != 1 {
+		t.Fatalf("collected %d links, want 1", len(got))
+	}
+	if got[0].URL != "https://example.com/a" {
+		t.Errorf("url = %q", got[0].URL)
+	}
+	if got[0].Comment != "This is worth reading." {
+		t.Errorf("comment = %q; the commentary is the part worth keeping", got[0].Comment)
+	}
+	if got[0].Title != "A Title" {
+		t.Errorf("title = %q", got[0].Title)
+	}
+}
+
+// TestFacebookLinksStayOutOfTheCorpus is the constraint that motivated a
+// separate artefact: URLs tokenise into noise and would degrade every search.
+func TestFacebookLinksStayOutOfTheCorpus(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[{"timestamp": 1600000000,
+	  "data": [{"post": "Commentary only."}],
+	  "attachments": [{"data": [{"external_context": {"url": "https://example.com/tracking?utm_source=x"}}]}]}]`
+
+	docs, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(docs[0].Text, "example.com") || strings.Contains(docs[0].Text, "utm_source") {
+		t.Errorf("a URL leaked into the indexed text: %q", docs[0].Text)
+	}
+	if len(p.Links()) != 1 {
+		t.Error("the link was not collected")
+	}
+}
+
+// TestFacebookCollectsLinksFromTextlessPosts covers the bare share: no
+// commentary, so no document, but still a link worth keeping.
+func TestFacebookCollectsLinksFromTextlessPosts(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[{"timestamp": 1600000000, "title": "A Writer shared a link.",
+	  "data": [{}],
+	  "attachments": [{"data": [{"external_context": {"url": "https://example.com/a"}}]}]}]`
+
+	docs, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Fatalf("a bare link share produced %d documents, want 0", len(docs))
+	}
+	if len(p.Links()) != 1 {
+		t.Error("a bare link share lost its link")
+	}
+}
+
+func TestFacebookDropsUnusableURLs(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[{"timestamp": 1600000000, "data": [{}],
+	  "attachments": [{"data": [
+	    {"external_context": {"url": "/"}},
+	    {"external_context": {"url": "not a url at all"}},
+	    {"external_context": {"url": "https://example.com/good"}}
+	  ]}]}]`
+
+	if _, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := p.Links(); len(got) != 1 || got[0].URL != "https://example.com/good" {
+		t.Errorf("kept %+v, want only the usable one", got)
+	}
+	if p.DroppedLinks() != 2 {
+		t.Errorf("dropped = %d, want 2; unusable links must be accounted for, not silently lost", p.DroppedLinks())
+	}
+}
+
+// TestFacebookLinksAreSorted matters because the artefact is written to a file
+// and regenerated, so it has to diff cleanly.
+func TestFacebookLinksAreSorted(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[
+	  {"timestamp": 1700000000, "data": [{}], "attachments": [{"data": [{"external_context": {"url": "https://example.com/late"}}]}]},
+	  {"timestamp": 1500000000, "data": [{}], "attachments": [{"data": [{"external_context": {"url": "https://example.com/early"}}]}]}
+	]`
+
+	if _, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+
+	got := p.Links()
+	if len(got) != 2 {
+		t.Fatalf("collected %d links", len(got))
+	}
+	if !got[0].Published.Before(got[1].Published) {
+		t.Error("links are not in ascending date order")
+	}
+}
+
+func TestFacebookImplementsLinkLister(t *testing.T) {
+	var p Parser = &facebookParser{}
+	if _, ok := p.(LinkLister); !ok {
+		t.Error("the facebook parser should list links")
+	}
+}
+
+func TestFacebookRepairsLinkCommentary(t *testing.T) {
+	p := &facebookParser{}
+
+	r := fbRecord{
+		Timestamp:   1600000000,
+		Data:        []fbData{{Post: mangle("didn’t like it")}},
+		Attachments: []fbAttachment{{Data: []fbAttachmentData{{ExternalContext: &fbExternalContext{URL: "https://example.com/a"}}}}},
+	}
+	p.collectLinks(r, "your_posts_1.json")
+
+	got := p.Links()
+	if len(got) != 1 {
+		t.Fatalf("collected %d links", len(got))
+	}
+	if got[0].Comment != "didn’t like it" {
+		t.Errorf("comment = %q; the encoding repair must reach the links artefact too", got[0].Comment)
+	}
+}
+
+// TestFacebookDeduplicatesRepeatedShares covers the export repeating one
+// external_context across a record's attachments, which accounted for 317 of
+// 2,848 entries on a real export.
+func TestFacebookDeduplicatesRepeatedShares(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[{"timestamp": 1600000000, "data": [{"post": "Once."}],
+	  "attachments": [{"data": [
+	    {"external_context": {"url": "https://example.com/a"}},
+	    {"external_context": {"url": "https://example.com/a"}}
+	  ]}]}]`
+
+	if _, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Links(); len(got) != 1 {
+		t.Errorf("one share recorded twice produced %d links", len(got))
+	}
+}
+
+// TestFacebookKeepsGenuineReshares: the same URL at a different time is a real
+// second share, and when you shared something again is worth knowing.
+func TestFacebookKeepsGenuineReshares(t *testing.T) {
+	p := &facebookParser{}
+
+	body := `[
+	  {"timestamp": 1600000000, "data": [{"post": "First time."}],
+	   "attachments": [{"data": [{"external_context": {"url": "https://example.com/a"}}]}]},
+	  {"timestamp": 1700000000, "data": [{"post": "Again, years later."}],
+	   "attachments": [{"data": [{"external_context": {"url": "https://example.com/a"}}]}]}
+	]`
+
+	if _, err := p.ParseFile(fbSource(), "your_posts_1.json", []byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Links(); len(got) != 2 {
+		t.Errorf("two shares of one URL at different times produced %d links, want 2", len(got))
+	}
+}
