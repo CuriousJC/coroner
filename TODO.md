@@ -1,151 +1,226 @@
 # TODO
 
-Working notes for coroner. This file is the canonical list of planned work and of
-things Claude needs from Justin in order to continue; the roadmap comment in
-`cmd/coroner/main.go` points here rather than duplicating it, because two lists
-of planned work drift and then neither one is trustworthy.
+Working notes for coroner: what is planned, what was decided and why, and what is
+needed from Justin. Written to be read cold — assume whoever picks this up has no
+memory of the conversation that produced it.
 
-Convention: an item says what the work is, and *why it is shaped that way*, in
-the same register as CLAUDE.md. An item nobody can reconstruct the reasoning for
-in three months is an item that gets done wrong.
+**Division of labour with CLAUDE.md.** CLAUDE.md describes the system as it *is*:
+architecture, the determinism contract, and the measured facts behind each
+parser. This file is everything that is not yet true — planned work, open
+questions, decisions and their reasoning, and things waiting on someone outside
+the repo. Parser internals are not repeated here; two descriptions of the same
+thing drift and then neither is trustworthy. Where a parser's behaviour matters
+to a decision below, this file names the decision and points at CLAUDE.md for the
+mechanism.
 
----
-
-## Milestone: one searchable corpus
-
-The near-term goal. All three sources digest cleanly and `coroner search` spans
-them. No dedupe, no precedence, no overlap handling — those are deliberately
-deferred, because a corpus you cannot search is not a thing you can make
-judgements about overlap from. Get it whole first, then argue with it.
-
-Nothing here requires an architecture change. The digested directory already
-holds one set of files per corpus and search already loads all of them, so
-"one corpus" is a property of the store as it stands, not something to build.
-
-**Definition of done:**
-
-1. **Done** — `htmlsite` parser written, registered, `initsource` run against
-   `source/html_posts`. Validated on all 189 real pages: 189 documents, none
-   empty, none missing a date or title, no duplicate IDs, word counts spread
-   53–2329 with a median of 551 rather than the tight cluster that would mean
-   text truncated at the first newline.
-2. **Done** — `substack` parser written, replacing the `pendingParser`
-   placeholder. Validated on the real export: 139 files in, 134 documents out
-   with the five unpublished drafts skipped, no duplicate IDs, and every
-   document carrying both a title and a date. Word counts 239–3022, median 812.
-3. **Done** — embedding model pulled (Justin, 2026-08-06).
-4. All three digested together; `coroner stats` looks sane per corpus — no
-   suspiciously tight word-count spread, no missing years, no collapsed titles.
-5. `coroner search` returns results drawn from all three.
-
-Nothing has been digested yet. The current priority is a mergeable PR #3, not a
-built corpus; digesting is step 4 and comes after the parsers land.
-
-Once this lands on `main`, revisit embeddings — model choice and dimensions were
-picked before there was a corpus to judge them against. Deferred deliberately:
-changing the model invalidates every vector, so it is a thing to do to a working
-corpus, not on the way to building one.
-
-Post-milestone, and only then: overlap, precedence, dedupe.
+Convention: an item says what the work is *and why it is shaped that way*. An
+item nobody can reconstruct the reasoning for in three months is one that gets
+done wrong.
 
 ---
 
-## Next up
+## Where things stand — 2026-08-06
 
-### 1. Substack parser — done, kept here for the reasoning
+**All five parsers are written**: `text`, `html`, `htmlsite`, `facebook`,
+`substack`. Nothing in `parse.constructors` is pending. `pendingParser` survives
+unregistered, exercised directly by its test, so the next format named before it
+is written gets "not written yet" rather than a lie about being unrecognised.
 
-**Status: written and validated.** `internal/parse/substack.go`, ten tests,
-registered in place of the `pendingParser`. What follows is why it is shaped the
-way it is.
+**Branch and PR.** [PR #3](https://github.com/CuriousJC/coroner/pull/3) merged
+into `main` at `e7eea6a` on 2026-08-06. PR #2 was closed as superseded and its
+branch deleted. Current working branch is `feature/digest-milestone`, off
+`e7eea6a`.
 
-Measured contents:
+**The corpus is digested.** All three sources, 5,974 documents in 7,977 chunks,
+in 2m32s. Counts came out exactly as predicted:
 
-- **139 `.html` files** in `posts/`, named `<post_id>.<slug>.html`.
-- **`posts.csv`** — the sidecar: `post_id, post_date, is_published,
-  email_sent_at, inbox_sent_at, type, audience, title, subtitle, podcast_url`.
-- **218 `.delivers.csv` / `.opens.csv`** files, also in `posts/`. Per-subscriber
-  email analytics. Not writing, and they contain subscriber addresses — a
-  privacy matter, not merely noise.
-- **`email_list.ambivalentdad.csv`** — subscriber list. Same.
+| directory | manifest `type` | manifest `name` | documents | chunks |
+| --- | --- | --- | --- | --- |
+| `source/facebook_posts/` | `facebook` | `facebook_posts` | 5,651 | 6,490 |
+| `source/html_posts/` | `htmlsite` | `html_posts` | 189 | 739 |
+| `source/substack_posts/` | `substack` | `substack_posts` | 134 | 748 |
 
-Shape of the work:
+**Corpus naming settled** (Justin, 2026-08-06): every corpus takes its directory
+name, so Facebook's was changed from `facebook` to `facebook_posts` before the
+first digest. That was the whole reason to settle it then — the name is part of
+every document ID and names the files in `digested/`, so it is free to change
+before a digest and means re-digesting from scratch afterwards.
 
-- `Prepare` reads `posts.csv` into a `post_id` → metadata map. This is the case
-  the two-phase parser interface was designed for; CLAUDE.md names Substack as
-  the example.
-- `Include()` must be a **narrow allowlist** — `posts/*.html` only. Not a CSV
-  exclusion bolted on afterwards: an allowlist means a future export adding
-  another CSV cannot quietly start indexing subscriber addresses.
-- **`post_id` is a genuine native key.** Unlike Facebook, which had to synthesise
-  identity from timestamp plus text hash, Substack numbers its posts. IDs
-  survive a slug edit, and slugs are in the filename.
-- **Title comes from the sidecar, not the body.** The post HTML is a body
-  fragment starting at `<p>` with no `<h1>`.
-- **`subtitle` is real writing.** Decide deliberately whether it joins the
-  indexed text and record why — a subtitle prepended to every chunk carries the
-  same flattening risk that made Facebook's `title` field unusable.
-- **Strip the UI chrome**: 374 `<button>`, 374 `<svg>` with `<polyline>`/`<line>`
-  children, plus `<picture>`/`<source>`. Share buttons and audio players are not
-  text, and left in they inject identical boilerplate into every document.
-- **`<figcaption>` is real writing** — 94 of them. Check for duplication against
-  surrounding body text before appending, the way Facebook's captions needed
-  (905 of 1,148 were byte-identical to their post).
-- **Unpublished drafts are skipped** (Justin's call, 2026-08-06): only
-  `is_published: true` is corpus. That leaves 134 documents from 139 files. The
-  five drafts are exactly the five posts with no title and no date — two of them
-  (`slop`, 1265 words; `fears`, 861 words) read as finished essays, the other
-  three are scaffolding full of `!!!! IMAGE HERE !!!!` markers and `xxxxxx`
-  placeholder names, and nothing but reading them tells the groups apart. Taking
-  the published flag at its word is the non-guessing option: it is the author's
-  own record of what counts as finished. With drafts gone every remaining
-  document has both a title and a date, and the shortest is 239 words rather
-  than 58.
+**Ollama** is running with the embedding model pulled (`nomic-embed-text`, 768
+dimensions, what `embed.DefaultModel` names). `digest` has no lexical mode —
+`-mode=lexical` is a `search` flag — so a corpus cannot be built without it.
 
-### 2. `htmlsite` parser — done, kept here for the reasoning
+**CI has not run since `a703daf`, and this is now a pattern rather than a
+hiccup.** Two consecutive triggers were missed: the push of `2b5f4ed` to the PR
+branch, and the push of the merge commit `e7eea6a` to `main`. `ci.yml` fires on
+`pull_request` and on push to `main`, both workflows report `active`, and the
+repo is public, so the obvious explanations do not hold. Local `go build`,
+`go vet`, `gofmt -l` and `go test ./...` are clean, but **`go test -race` has
+never run against the code now sitting on `main`** — it needs cgo and does not
+run on a stock Windows box, so CI is the only place it executes.
 
-**Status: written and validated.** `internal/parse/htmlsite.go`, registered as
-type `htmlsite`, ten tests. `source/html_posts/corpus.yaml` exists. What follows
-is why it is shaped the way it is; the measurements are the reason not to
-"simplify" any of it without re-measuring.
+`ci.yml` previously had **no `workflow_dispatch`**, unlike `build_release.yml`,
+so a missed trigger left no way to kick a run short of pushing another commit.
+Added on this branch. It does not fix the trigger problem — it makes the problem
+recoverable, which is the most that can be done from inside the repo.
 
-This is Justin's hand-built site: 189 posts he copied out of Facebook into HTML
-by hand, spanning 2016–2026 (84 in 2024, 45 in 2025, single digits before 2020).
+---
 
-**It must not use the existing `html` parser.** That parser takes `<title>` as
-the document title, and here:
+## Immediate next steps
 
-- **188 of 189 `<title>` elements are the string `xolsiion writing`** — a
-  site-wide banner, not a title. The one exception is a real title, which reads
-  as an authoring slip rather than a pattern to rely on.
-- Since `doc.Indexed` prepends the title to every chunk before embedding, using
-  `<title>` would inject the same six characters into every vector in the corpus
-  and flatten exactly the distinctions search exists to find. This is the
-  Facebook `title` failure arriving by a different route, and it is the second
-  time this export family has presented it.
-- **`<h1>` is the real title** — 186 of 189 have one. The 3 without:
-  `2016.11.01-politics-post.html`, `2016.11.01-politics-post2.html`,
-  `2024-11-07-let-him-in.html`.
+1. **Merge this branch and run CI by hand** from the Actions tab, now that
+   `workflow_dispatch` exists. Confirm `-race` goes green against `main`. Until
+   that happens nobody knows whether `main` is sound. If the manual run also
+   fails to appear, the problem is with the repo's Actions configuration rather
+   than the workflow file, and that is the next thing to look at.
+2. **Then dedupe**, as a report — see below. It now has measurements rather than
+   guesses, and the shape is settled.
+3. **Revisit embeddings** when there is something to judge them against.
 
-Dates are the other reason it needs its own parser — the generic one extracts
-none, and here there are **two independent sources that disagree in format**:
+Deliberately not next: corpus balance, and any change to how search ranks. See
+the decisions below.
 
-- **Filename prefix**: 168 are `YYYY-MM-DD`, 11 are `YYYY.MM.DD`, and 10 use a
-  single-digit month or day (`2020-7-10-time-well-spent.html`,
-  `2025-04-7-own-it.html`). All 189 carry one.
-- **`<h2>` in the body**: 175 `MM.DD.YYYY`, 5 `MM.D.YYYY`, 2 `M.DD.YYYY`, 1
-  `MM-DD-YYYY`. Six files have no `<h2>` at all.
+---
 
-These were cross-checked across the whole export before the parser was written:
-**they agree on 169 pages and disagree on 14, and the `<h2>` is wrong every
-time.** So the filename wins unconditionally and the `<h2>` is not consulted as a
-fallback. A source that is wrong 14 times out of 183 is not one to reach for when
-the reliable one is already complete, and a wrong date is worse than no date
-because it silently reorders everything sorted by recency.
+## Revisit embeddings
 
-The 14, listed because they are **errors in the source files** Justin may want to
-fix — coroner now ignores them, so nothing is broken either way:
+The model and its dimensions were chosen before there was a corpus to judge them
+against, and the milestone was the thing that had to land first. Changing the
+model invalidates every vector, so this is something to do *to* a working corpus
+rather than on the way to building one. That condition is now met.
 
-| page | filename | `<h2>` says |
+**The most likely reason to change models has been retired.** Measured across
+all 7,977 chunks: the largest is 2,000 chars — `doc.MaxChars`, as designed —
+which is roughly 500 tokens against `nomic-embed-text`'s 2,048 context. Nothing
+is being truncated at embed time, so no chunk is silently losing its tail.
+
+What is left is an open evaluation with no evaluation set behind it, which is the
+same gap that makes `-depth` untunable. Building one means writing down a set of
+queries and what should come back for each — and only Justin can supply that,
+because it is his writing and he is the one who knows which post he meant. Until
+that exists, "is the model good enough" has no answer that is not a vibe.
+
+One measured caveat for whoever does this: mean chunk length is **433 chars**,
+far below the 1,200 target, because Facebook status updates dominate. Short-text
+embedding is a different regime from paragraph embedding, so an evaluation drawn
+only from Substack essays would not describe how the corpus actually behaves.
+
+---
+
+## After the milestone
+
+### Cross-corpus dedupe, with a precedence order
+
+Justin's rule, settled 2026-08-06 and now complete:
+
+**`substack` > `htmlsite` > `facebook`.**
+
+Substack wins over everything. The HTML site wins over Facebook because those
+posts were copied out of Facebook *by hand*, so the HTML is the curated version —
+correctly encoded, given a real title, given a deliberate date — and the Facebook
+record is the raw original. The encoding measurement supports this independently:
+the HTML export is clean UTF-8 throughout, while the Facebook export still
+carries the double-encoding `repairMojibake` has to undo.
+
+**The hard part, and why this was deferred rather than bundled into the
+milestone: hand-copying means `ContentHash` will not match.** That was the
+prediction. It is now measured against the real digested corpus, and it was
+right by a wide margin:
+
+- **171 of the 189 `html_posts` share a date with at least one Facebook post**
+  (176 distinct dates in `html_posts`, 171 of them present in `facebook_posts`).
+  So the overlap is close to total, as expected from posts copied out of
+  Facebook by hand.
+- **Exactly 3 documents match by `ContentHash`.** A hash-equality dedupe would
+  catch 3 of roughly 175 real duplicates — under 2%. This confirms the reason
+  for deferring rather than reusing the anticipated pass.
+- **5-word-shingle Jaccard, against Facebook posts within ±2 days, separates
+  them cleanly**: 169 of 189 score **≥0.8**, 6 score 0.5–0.8, **nothing at all
+  lands between 0.2 and 0.5**, and 14 score 0.0. The empty middle is the useful
+  part — there is no ambiguous band to agonise over a threshold in, so anything
+  from about 0.5 to 0.8 draws the same line. Four of the top matches are exactly
+  1.00 with identical word counts, which are copies that happen not to be
+  byte-identical.
+- **The 14 non-matches are genuinely HTML-only**, not detection failures. Two of
+  them are titled `Small Government (NEVER POSTED)` and `Two Parents (NEVER
+  POSTED)`, which is the author's own record of the fact.
+
+Remaining open questions:
+
+- **What signal?** Largely answered: **date proximity plus 5-shingle Jaccard**,
+  measured above, is decisive on this data and needs no embeddings. Embedding
+  cosine was the other candidate and would have meant a judgement call about a
+  threshold; shingling turned out not to. Worth keeping the ±2 day window — it
+  is what makes the comparison cheap enough to run brute force, and every corpus
+  has reliable dates.
+- **Does the result change what search returns, or is it a separate report?**
+  **Settled (Justin, 2026-08-06): a report, and nothing else.** Search behaviour
+  does not change — no filtering, no suppression, not even behind a flag until
+  there is a reason to want one. Silently changing ranking is the class of quiet
+  wrongness the rest of the design exists to avoid, and a dedupe pass that only
+  ever prints is one you can be wrong about harmlessly. The precedence order
+  still matters: it decides which member of a group the report names as the
+  winner.
+- **Where does precedence live?** Still open. A `priority` field in `corpus.yaml`
+  is the natural home: it generalises without hardcoding three corpus names, and
+  keeps the rule beside the data it describes. Less urgent now that the pass only
+  reports — a wrong priority produces a misleading line rather than a hidden
+  document.
+
+Shape, given the above: a `coroner dupes` subcommand that loads the digested
+corpus, groups near-duplicates by date proximity and 5-shingle Jaccard, and
+prints each group with its score and its precedence winner. It reads
+`digested/` only, so it needs no ollama and cannot corrupt anything.
+
+### Corpus balance — observed, deliberately not acted on
+
+**Facebook is 95% of the corpus by document count**: 5,651 of 5,974, with a
+median of 20 words. The curated writing — `substack_posts` and `html_posts`, 323
+documents between them — is outnumbered roughly 18:1. Measured on three test
+queries after the first digest, Facebook took 4, 9 and 8 of the top 12.
+
+Nothing is broken. The ranking is not favouring Facebook; there is simply far
+more of it, and a short status update that genuinely matches a query deserves to
+rank. But the writing most likely to be worth finding is the smallest part of
+the corpus, and that is a property worth having written down.
+
+**Decision (Justin, 2026-08-06): leave it and use the tool first.** Whether
+Facebook crowding the results is actually annoying is something you find out by
+searching, not by reasoning about ratios, and every available fix — a corpus
+filter, a boost, a per-corpus quota — is a ranking judgement made before there
+is evidence for it. Revisit after real use.
+
+Note that **dedupe will not move this number**: it concerns roughly 175
+documents, under 3% of the corpus, and under the report-only decision it removes
+none of them.
+
+If it does turn out to need addressing, a `-source` filter on `search` — the way
+`stats -source` already works — is the option that involves no ranking judgement
+at all, and so the one to reach for first.
+
+### Search: filter by date range
+
+Most of what "what was I writing about in 2019" needs. Every document already
+carries a date, so this is a filter over loaded documents rather than anything
+structural. Worth more once three corpora span 2016–2026.
+
+### Search: `-explain`
+
+Show which query terms drove a lexical hit. Diagnostic for the half of retrieval
+that is legible — there is no equivalent for the vector half, and pretending
+otherwise would be worse than omitting it.
+
+---
+
+## For Justin: errors in the HTML site source files
+
+Found by cross-checking each page's filename date against its in-body `<h2>`
+across all 189 pages. They agree on 169 and **disagree on 14, with the `<h2>`
+wrong every time.** Coroner takes the filename unconditionally and ignores the
+`<h2>`, so nothing is broken either way — these are listed only because they are
+mistakes in the writing that Justin may want to correct at the source.
+
+| page | filename says | `<h2>` says |
 | --- | --- | --- |
 | `2016.11.11-why-vote-for-trump` | 2016-11-11 | 2016-10-25 |
 | `2020-05-22-100k-dead` | 2020-05-22 | 2020-02-27 |
@@ -167,122 +242,117 @@ whose page was evidently used as a template and its heading never updated. One i
 a year typo'd a decade out. The rest are off by a day or two, which reads like
 writing on one day and dating it another.
 
-Also:
-
-- **File mtimes are not post dates.** They range across 2023–2025 independently
-  of content, so they are edit times. Do not fall back to them.
-- **Six filenames end in ` copy`** (`2020-06-30-trump-era copy.html` and five
-  others). **None has a surviving twin** — checked. They are ordinary posts whose
-  filename records an editing accident, and they must not be dropped as
-  duplicates. `2025-07-19--tank-disaster copy.html` also has a doubled dash.
-- **Encoding is clean**: all 189 valid UTF-8, zero mojibake markers, 32 files
-  carrying non-ASCII. No `repairMojibake` equivalent is needed. This is itself
-  evidence for the precedence rule below — the hand-copying passed through a
-  rendering step that repaired what the Facebook export still carries raw.
-- Native key is the relative path, as with the generic `html` parser, so IDs are
-  stable under content edits and change if a file is renamed. Given the ` copy`
-  names may get tidied, that tradeoff is worth stating out loud but not worth
-  changing — the alternative makes every typo fix a new document.
-
-Two more things found while writing it, both of which shaped the code:
-
-- **Five pages have the literal `<h1>title</h1>`** — started from a template and
-  never filled in. Letting the word through would give five unrelated posts the
-  same title, so it falls back to the filename slug, as do the three pages with
-  no `<h1>` at all.
-- **Twenty-three pages have no `<p>` tags**: the writing sits directly in the
-  container div, hand-wrapped at roughly eighty characters. HTML treats those
-  newlines as ordinary whitespace, but `doc.Normalise` deliberately preserves
-  newlines because for most formats they are authored structure — so passing the
-  markup's wrapping through would put a hard break mid-sentence throughout the
-  text and hand the chunker false boundaries. The parser unwraps them. Blank
-  lines are kept, which a browser would not do: in about half of those pages a
-  blank line is the author's only record of where a paragraph falls, and since
-  the chunker splits on paragraph boundaries, honouring it recovers structure
-  that would otherwise be lost. On pages that do use `<p>`, it changes nothing.
-
-### 3. Initialise the two new sources
-
-`coroner initsource -source=source/substack_posts -type=substack` and the
-equivalent for `html_posts`. Neither has a `corpus.yaml`, so neither digests.
+Two smaller things in the same export, both handled and neither needing a fix:
+**five pages have the literal `<h1>title</h1>`** left over from a template, and
+**six filenames end in ` copy`** — none of which has a surviving twin, so they are
+ordinary posts rather than duplicates.
 
 ---
 
-## After the milestone
+## Decisions, and why
 
-### Cross-corpus dedupe, with a precedence order
+Recorded so they are not silently reversed by someone who only sees the code.
 
-Justin's rule, settled 2026-08-06 and now complete:
-
-**`substack` > `htmlsite` > `facebook`.**
-
-Substack wins over everything. The HTML site wins over Facebook, because those
-posts were copied out of Facebook by hand — so the HTML is the curated version
-(correctly encoded, given a real title, given a deliberate date) and the Facebook
-record is the raw original. The encoding measurement bears this out
-independently: the HTML export is clean UTF-8 throughout, while Facebook's still
-carries the double-encoding `repairMojibake` has to undo.
-
-The hard part, and the reason this is deferred rather than bundled into the
-milestone: **hand-copying means `ContentHash` will not match.** The dedupe pass
-CLAUDE.md anticipated compares content hashes, which catches byte-identical
-duplicates and will catch approximately none of these. Editing while copying is
-the normal case, not the exception.
-
-So this needs near-duplicate detection, which means a similarity threshold, which
-means a judgement call about what counts as the same post. Open questions to
-settle before writing it:
-
-- What signal? Date proximity plus text similarity is the obvious pair, and both
-  corpora have reliable dates. Shingling or embedding cosine are both plausible;
-  embeddings are already computed, which argues for reusing them.
-- Does the result change what search returns, or is it a separate report? Silently
-  changing ranking is the class of quiet wrongness the rest of the design avoids.
-  A report Justin reads first is the safer default.
-- Where does precedence live? A `priority` field in `corpus.yaml` generalises
-  ("this corpus supersedes that one") without hardcoding two names, and keeps the
-  rule next to the data it describes.
-- A `priority` field in `corpus.yaml` is the obvious home for the order, since it
-  generalises without hardcoding three names and keeps the rule beside the data
-  it describes.
-
-### Search: filter by date range
-
-Most of what "what was I writing about in 2019" needs. Every document already
-carries a date, so this is a filter over loaded documents rather than anything
-structural. Worth more once three corpora span 2016–2026.
-
-### Search: `-explain`
-
-Show which query terms drove a lexical hit. Diagnostic for the half of retrieval
-that is legible — there is no equivalent for the vector half, and pretending
-otherwise would be worse than omitting it.
+- **`htmlsite` is a separate format from `html`, not a configuration of it.**
+  188 of 189 pages carry the same site banner in `<title>`, and titles are
+  prepended to every chunk before embedding. Reusing the generic parser would put
+  one identical string into every vector in the corpus.
+- **Filename dates beat in-body dates for `htmlsite`**, unconditionally — see the
+  table above.
+- **Substack drafts are skipped** (Justin, 2026-08-06): only `is_published: true`
+  is corpus, leaving 134 documents from 139 files. The five drafts are exactly
+  the five posts with no title and no date; two read as finished essays and three
+  are scaffolding, and nothing but reading them separates the two. Taking the
+  published flag at its word is the non-guessing option — it is the author's own
+  record of what counts as finished. A heuristic keyed on placeholder text would
+  be fragile in exactly the way this codebase avoids.
+- **Substack subtitles live in the text, not the title.** They are real writing
+  that exists nowhere else (117 of 139 posts, only one already appearing in its
+  own body), but a title is repeated across every chunk and a summary sentence
+  repeated through a long post is the Facebook `title` shape again.
+- **`Include()` for Substack is a narrow allowlist and must stay one.** `posts/`
+  holds 218 analytics CSVs carrying subscriber email addresses. Naming what to
+  read rather than what to skip means a later export adding another analytics
+  file cannot quietly start indexing them. This is a privacy constraint, not
+  tidiness, and there is a test asserting it.
+- **Every parser is written against a real export, never a documented format.**
+  Facebook arrived double-encoded in a way nothing documented would have
+  predicted, and encoding errors silently corrupt every document ID in a corpus.
+  If a format is named before its bytes exist, register it with `pendingParser`
+  and wait.
 
 ---
 
 ## Housekeeping
 
-Small, low-risk, none of them urgent.
+Small, low-risk, none urgent.
 
 - **CLAUDE.md omits `internal/ignore`** from the architecture walkthrough. It is
   a real package with tests, carried from hecato, and it governs what the walk
-  never sees — which makes it load-bearing for the Substack allowlist above.
+  never sees — which makes it load-bearing for the Substack allowlist decision.
 - **CLAUDE.md's Commands block omits `coroner links`**, though the subcommand
   ships and has its own architecture section further down.
 - **`internal/version` has no tests**, which CLAUDE.md states deliberately. Noted
   only so it does not get "fixed" by someone reading a coverage report.
+- **CLAUDE.md still says the dedupe pass compares `ContentHash`.** Measurement
+  now says that catches 3 of ~175 real duplicates. Worth correcting when the
+  pass is actually written, not before — CLAUDE.md describes what is, and right
+  now what is, is nothing.
+
+---
 
 ## Done
 
-- **`substack` parser** (2026-08-06). `internal/parse/substack.go` plus ten
-  tests, replacing `pendingParser` in the registry. `pendingParser` itself stays
-  and is now exercised directly by its test, since no registered format is
-  pending — it is what the next unwritten format should get instead of being
-  told its type is unknown.
-- **`htmlsite` parser** (2026-08-06). `internal/parse/htmlsite.go` plus ten
-  tests, registered in `parse.constructors` and listed in the manifest starter.
+- **Milestone: one searchable corpus** (2026-08-06). All three sources digest
+  cleanly and `coroner search` spans them. No architecture change was needed —
+  `digested/` already held one set of files per corpus and search already loaded
+  all of them, so "one corpus" was a property of the store as it stood.
+
+  What was checked, and what it showed. `coroner stats` per corpus, read for the
+  three failure shapes it exists to expose — a tight word-count spread meaning
+  text truncated at the first newline, a gap in the date histogram meaning a
+  dropped year, a low hapax share meaning boilerplate got in. None of them
+  appeared:
+
+  | corpus | span | words/doc (min/median/max) | vocabulary | hapax |
+  | --- | --- | --- | --- | --- |
+  | `facebook_posts` | 2009-08-04 – 2025-12-24 | 1 / 20 / 2,162 | 22,077 | 49% |
+  | `html_posts` | 2016-10-25 – 2026-01-01 | 53 / 551 / 2,329 | 9,268 | 45% |
+  | `substack_posts` | 2018-11-18 – 2026-08-03 | 239 / 812 / 3,022 | 9,388 | 44% |
+  | all | 2009-08-04 – 2026-08-03 | 1 / 21 / 3,022 | 23,869 | 41% |
+
+  Facebook's median of 20 words is a status update, not a truncation — its
+  spread runs to 2,162 and its histogram has no missing year. `coroner stats
+  -sample=6` on each of the two smaller corpora read as real writing throughout,
+  which is what the evenly-spread sample is for: documents are sorted by hash,
+  so the front of the file is a fixed arbitrary slice that would hide a parser
+  failing on later records.
+
+  One thing that looked wrong and was not: a Substack sample began
+  `Capitalism Can Be a Bitch / Premium / I pay a yearly fee…`, which reads like
+  paywall chrome. It is the post's subtitle followed by its first section
+  heading — the title is `Consumption Tiers` and lives in `Title`, exactly the
+  shape the subtitle decision below describes. `Premium` occurs 4 times in the
+  whole corpus and leads no document. Recorded because the next person to read a
+  sample will have the same suspicion.
+
+  Search was run across several queries and returned hits from all three corpora
+  every time.
+- **Corpus naming settled** (Justin, 2026-08-06). Every corpus takes its
+  directory name; `facebook` became `facebook_posts` before the first digest.
+- **`substack` parser** (2026-08-06). `internal/parse/substack.go` plus tests,
+  replacing `pendingParser` in the registry. Validated on the real export: 139
+  files in, 134 documents out, no duplicate IDs, every document carrying both a
+  title and a date, words 239–3022 with a median of 812.
+- **`htmlsite` parser** (2026-08-06). `internal/parse/htmlsite.go` plus tests,
+  registered in `parse.constructors` and listed in the manifest starter;
   `corpus.example.yaml` regenerated to match, which
-  `TestExampleManifestMatchesGenerator` requires.
+  `TestExampleManifestMatchesGenerator` requires. Validated on all 189 real
+  pages: 189 documents, none empty, none missing a date or title, no duplicate
+  IDs, words 53–2329 with a median of 551.
+- **TODO.md established** (2026-08-06) as the canonical home for planned work.
+  The `cmd/coroner/main.go` header comment and CLAUDE.md's Roadmap section both
+  point here instead of carrying their own lists.
 - **Branch consolidation** (2026-08-06). `updates` was fully contained in
   `updates-1`; PR #2 closed as superseded by #3, branch deleted locally and on
   the remote. One feature branch.

@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets a run be started by hand. This is here because the automatic triggers
+  # have silently failed to fire twice — once on a push to a PR branch, once on
+  # the merge commit to main — and without this there is no way to kick CI
+  # short of pushing another commit. The race detector only ever runs here, so
+  # a missed trigger means nobody knows whether main is sound.
+  workflow_dispatch:
 
 jobs:
   build:
