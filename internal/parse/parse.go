@@ -63,10 +63,9 @@ type Parser interface {
 var constructors = map[string]func() Parser{
 	"text":     func() Parser { return &textParser{} },
 	"html":     func() Parser { return &htmlParser{} },
+	"htmlsite": func() Parser { return &htmlsiteParser{} },
 	"facebook": func() Parser { return &facebookParser{} },
-	"substack": func() Parser {
-		return &pendingParser{format: "substack", waitingFor: "a Substack export zip, expanded"}
-	},
+	"substack": func() Parser { return &substackParser{} },
 }
 
 // Link is one outbound link an export recorded, with whatever the author wrote

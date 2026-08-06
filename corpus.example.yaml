@@ -8,6 +8,7 @@
 #   facebook  a Facebook "Download your information" export
 #   substack  a Substack export: posts.csv plus posts/*.html
 #   html      loose HTML files
+#   htmlsite  a hand-built HTML site: <h1> title, dated filenames
 #   text      loose .txt or .md files
 type: html
 

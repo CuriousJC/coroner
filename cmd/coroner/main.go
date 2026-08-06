@@ -17,10 +17,11 @@ main executable for coroner
 	make all
 
 //Stuff todo:::
-TODO: parser: substack, written against a real export rather than the documented shape
-TODO: method: dedupe, the after-the-fact pass that relates near-identical documents across corpora
-TODO: search: filter by date range, which is most of what "what was I writing about in 2019" needs
-TODO: search: -explain, showing which query terms drove a lexical hit
+Planned work lives in TODO.md at the repo root, not here. It was moved out
+because a roadmap in a header comment cannot carry the reasoning behind an item,
+and an item without its reasoning gets done wrong. In brief: the substack parser
+(now unblocked), a third HTML export awaiting bytes, cross-corpus dedupe, and two
+search refinements.
 */
 package main
 

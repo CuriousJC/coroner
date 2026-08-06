@@ -26,6 +26,7 @@ func Starter(name, sourceType string) string {
 	b.WriteString("#   facebook  a Facebook \"Download your information\" export\n")
 	b.WriteString("#   substack  a Substack export: posts.csv plus posts/*.html\n")
 	b.WriteString("#   html      loose HTML files\n")
+	b.WriteString("#   htmlsite  a hand-built HTML site: <h1> title, dated filenames\n")
 	b.WriteString("#   text      loose .txt or .md files\n")
 	fmt.Fprintf(&b, "type: %s\n", sourceType)
 	b.WriteString("\n")

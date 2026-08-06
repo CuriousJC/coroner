@@ -87,7 +87,9 @@ A source directory holds one export plus a `corpus.yaml` saying what it is. Coro
 
 `parse.Parser` is two phases: `Prepare` runs once and is where a format reads its sidecar metadata (Substack's `posts.csv`); `ParseFile` is called concurrently and must be read-only afterwards. Adding a format means a new file in `internal/parse`, an entry in `constructors`, and a line in the manifest starter's type list.
 
-`text`, `html` and `facebook` are implemented. `substack` is **registered but pending** — `pendingParser` returns a clear error saying it is not written yet. Registered rather than absent on purpose: a manifest saying `type: substack` is not a typo and should not be told it is one. It waits on a real export, because writing a parser against a documented format rather than real bytes is how you get one that is confidently wrong about encoding, and encoding errors quietly corrupt every document ID in a corpus.
+`text`, `html`, `htmlsite`, `facebook` and `substack` are all implemented. Nothing is pending.
+
+`pendingParser` stays anyway, exercised by a test that constructs it directly. It is what a format named in a manifest before its parser exists should get: a clear "not written yet" rather than being told the type is unknown. Every format here has been written against a real export rather than a documented shape, and that order is not negotiable — a parser written from documentation is confidently wrong about encoding, and encoding errors quietly corrupt every document ID in a corpus. Facebook proved it, arriving double-encoded in a way nothing documented would have predicted.
 
 `parse.RecordCounter` is an optional interface for parsers whose files hold many records. Only `facebook` implements it. It exists because "1 file parsed, 5,651 documents" gives no way to tell a photo-heavy export from a parser that has silently started dropping things.
 
@@ -101,6 +103,32 @@ Written against a real 8,195-record export, and these numbers are why the parser
 - **The export is double-encoded**: UTF-8 bytes re-read as latin-1, so `don't` arrives as `donâ€™t` and an emoji as four accented letters. `repairMojibake` undoes it, and runs *before* `doc.New` because every document ID derives from the text. Measured on the real export: 1,200 strings repaired, 5,595 untouched, zero mojibake markers surviving. Its guards matter more than its transformation — it refuses unless the result is valid UTF-8, the input had a byte above ASCII, and the result contains a multi-byte character, so genuine latin-1 text and plain ASCII pass through unharmed.
 - **Only the posts files are read.** `your_posts*.json`, globbed because a large export splits into `_1`, `_2`. `posts_on_other_pages_and_profiles.json` looks promising and holds no post text at all; `edits_you_made_to_posts.json` is edit history that would duplicate everything.
 - **31% of records hold no text.** Photos and bare link shares. That is normal, and the reason the quiet-corpus warning threshold is 80% rather than something that would fire here.
+
+### What the hand-built HTML site actually looks like
+
+`htmlsite` reads a site written and maintained by hand, one page per post. Measured against a real 189-page export spanning 2016–2026.
+
+It is a separate format from `html` rather than a configuration of it, and the reason is the title. The generic parser falls back to `<title>`, and **188 of the 189 pages carry the identical site banner there**. Since `doc.Indexed` prepends the title to every chunk before embedding, taking it would put the same string into every vector in the corpus — the same flattening the Facebook `title` field caused, arriving by a different route. The real title is the `<h1>`.
+
+- **The `<h1>` is the title and the first `<h2>` is the date line.** Exactly one of each on 186 pages, none on the other three, and no page uses either as a subheading further down. That is what makes removing both from the body text safe; on a site where `<h2>` were a real subheading it would be destroying writing. An `<h2>` that does not parse as a date is left alone, because then it *is* writing.
+- **The filename date wins unconditionally.** Both sources were cross-checked across the whole export: they agree on 169 pages and disagree on 14, and the `<h2>` is wrong every time. Five carry the date of the very first post, whose page was used as a template; one is a year typo'd a decade out; the rest are off by a day or two. All 189 filenames carry a date where six pages have no `<h2>` at all. A wrong date is worse than no date, because it silently reorders everything sorted by recency.
+- **Five pages have the literal `<h1>title</h1>`**, never filled in after being copied from a template. Those and the three with no `<h1>` fall back to the filename slug, minus its date prefix.
+- **Six filenames end in ` copy`, and none has a surviving twin.** They are ordinary posts whose filename records an editing accident, not duplicates — the suffix is dropped from a slug title but the pages stay.
+- **Twenty-three pages have no `<p>` tags**: the writing sits directly in the container div, hand-wrapped. HTML treats those newlines as ordinary whitespace, but `doc.Normalise` deliberately preserves newlines because for most formats they are authored structure, so the markup's wrapping would become hard breaks mid-sentence and hand the chunker false boundaries. `unwrap` collapses them. Blank lines are kept, which a browser would not do: in about half those pages a blank line is the author's only record of where a paragraph falls.
+- **Encoding is clean** — all 189 valid UTF-8, zero mojibake. No repair step, unlike Facebook.
+
+### What the Substack export actually looks like
+
+`substack` reads `posts.csv` beside a `posts/` directory of HTML bodies. Measured against a real 139-post export. This is the format the two-phase parser interface was designed around: the HTML holds only the body — no title, no date, no `<h1>` — and everything else is in the sidecar, so `Prepare` has to read it first.
+
+- **`Include()` is a narrow allowlist, `posts/*.html`, and must stay one.** `posts/` also holds **218 `.delivers.csv` and `.opens.csv` files** — per-subscriber email analytics carrying subscriber addresses — with another subscriber list at the export root. Naming what to read rather than what to skip means a future export adding an analytics file cannot quietly start indexing addresses. This is a privacy constraint, not a tidiness one.
+- **`post_id` is a genuine native key**, and the filename is exactly `<post_id>.html`. Checked: 139 rows, 139 files, no row without a file and no file without a row. Unlike Facebook, where identity had to be synthesised from a timestamp and a text hash, an edit to a post's text leaves its ID stable.
+- **The subtitle is kept, in the text rather than the title.** 117 of 139 posts have one, they are distinct per post, and only one already appears in its own body — so it is writing that exists nowhere else. It is not folded into `Title`, because `doc.Indexed` repeats the title across every chunk and a summary sentence repeated through a long post is the Facebook `title` shape again.
+- **Unpublished drafts are skipped**, leaving 134 documents from 139 files. The five drafts are exactly the five posts with no title and no date — two read as finished essays, three are scaffolding full of placeholder markers, and nothing but reading them separates the two. `is_published` is taken at its word rather than second-guessed: it is the author's own record of what counts as finished, and a heuristic keyed on placeholder text would be fragile in exactly the way this codebase avoids. With drafts gone, every remaining document has both a title and a date.
+- **Widget chrome is stripped by the existing `skipped` set** — 374 `<button>` and 374 `<svg>` across the export. Nothing else recurs: the only lines appearing in more than a fifth of posts are "Squirt Says…" and "Dad Responds…", which are the author's own recurring column headings, not injected boilerplate.
+- **Captions are kept whole.** 94 `<figcaption>` elements, only 2 repeating body text — the opposite of Facebook, where 905 of 1,148 were byte-identical to their post and had to be deduplicated.
+- **Encoding is clean**: 139 files, zero invalid UTF-8, zero mojibake.
+- Bodies are machine-generated and arrive on a single line, so `ExtractText` is used directly with no unwrapping.
 
 ### Document identity
 
@@ -192,4 +220,6 @@ Present as written — don't treat them as bugs to fix unless asked:
 
 ## Roadmap
 
-Planned work lives in the header comment block of `cmd/coroner/main.go`. Check there before proposing new subcommands. The near-term items are the Facebook and Substack parsers, and the cross-corpus dedupe pass.
+Planned work lives in `TODO.md` at the repo root. Check there before proposing new subcommands. It carries the reasoning behind each item as well as the item, which a header comment could not, and it is also where anything Claude needs from Justin — an export not yet handed over, a decision not yet made — is recorded so it survives the end of a session.
+
+All five parsers are written. The near-term item is the cross-corpus dedupe pass, which now has a settled precedence order — `substack` > `htmlsite` > `facebook` — and one measured complication: the HTML posts were copied out of Facebook *by hand*, so `ContentHash` equality will catch almost none of the real overlap and the pass needs near-duplicate detection rather than hash matching.
