@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -118,6 +117,22 @@ type Report struct {
 	// export genuinely lists the same item twice.
 	Duplicates int
 
+	// EmptyFiles are files that parsed without error and yielded no documents.
+	//
+	// Reported separately from Errors because they are a different situation
+	// with the same symptom. A file that fails to parse is loud. A file that
+	// parses to nothing is silent, and it looks identical whether the export
+	// genuinely holds no text or the parser has quietly stopped working. That
+	// ambiguity is the reason this field exists.
+	EmptyFiles []string
+
+	// RecordsSeen and RecordsEmpty come from a parse.RecordCounter, for formats
+	// where one file holds many records. Zero when the parser does not count,
+	// which is the honest answer for one-file-one-document formats rather than
+	// a number that would just restate the file counts.
+	RecordsSeen  int
+	RecordsEmpty int
+
 	Errors  []FileError
 	Elapsed time.Duration
 
@@ -200,6 +215,27 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 
 	rep.Elapsed = time.Since(started)
 	return rep, nil
+}
+
+// ParseOnly walks a source and runs its parser, discarding the documents.
+//
+// It exists for the artefacts that fall out of parsing rather than being part of
+// the corpus -- outbound links, so far. Those need the parse but neither an
+// embedder nor a digested corpus, which is what makes `coroner links` work with
+// ollama absent.
+//
+// Sharing the walk and the worker pool with Run is the point. A second path
+// through the same export would be free to drift out of step with the first, and
+// the two disagreeing about what an export contains is exactly the kind of quiet
+// wrongness this codebase spends its effort avoiding.
+func ParseOnly(ctx context.Context, dir string, man *corpus.Manifest, parser parse.Parser, src parse.Source) error {
+	files, err := enumerate(dir, man, parser)
+	if err != nil {
+		return err
+	}
+
+	parseAll(ctx, src, parser, Options{SourceDir: dir}, files, &Report{})
+	return nil
 }
 
 // enumerate lists the files the parser should be offered, in sorted order.
@@ -332,10 +368,18 @@ func parseAll(ctx context.Context, src parse.Source, parser parse.Parser, opts O
 			rep.Errors = append(rep.Errors, *errs[i])
 			continue
 		}
-		if len(results[i]) > 0 {
-			rep.Parsed++
-			out = append(out, results[i]...)
+		if len(results[i]) == 0 {
+			rep.EmptyFiles = append(rep.EmptyFiles, files[i])
+			continue
 		}
+		rep.Parsed++
+		out = append(out, results[i]...)
+	}
+
+	// A parser that reads many records per file knows something the file counts
+	// cannot express.
+	if rc, ok := parser.(parse.RecordCounter); ok {
+		rep.RecordsSeen, rep.RecordsEmpty = rc.Records()
 	}
 
 	return out
@@ -542,14 +586,4 @@ func updateManifest(opts Options, man *corpus.Manifest, rep *Report) error {
 	})
 
 	return s.SaveManifest(m)
-}
-
-// Describe renders a one-line summary of what a report contains.
-func Describe(rep *Report) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d documents, %d chunks", rep.Documents, rep.Chunks)
-	if rep.Reused > 0 {
-		fmt.Fprintf(&b, " (%d embedded, %d reused)", rep.Embedded, rep.Reused)
-	}
-	return b.String()
 }

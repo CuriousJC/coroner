@@ -50,29 +50,53 @@ func TestImplementedDistinguishesPendingParsers(t *testing.T) {
 	if !Implemented("text") {
 		t.Error("text should be implemented")
 	}
-	if Implemented("facebook") {
-		t.Error("facebook is not written yet and should not claim to be")
+	if !Implemented("facebook") {
+		t.Error("facebook should be implemented")
+	}
+	if !Implemented("htmlsite") {
+		t.Error("htmlsite should be implemented")
+	}
+	if !Implemented("substack") {
+		t.Error("substack should be implemented")
 	}
 	if Implemented("nonsense") {
 		t.Error("an unregistered type reported as implemented")
 	}
 }
 
-// TestPendingParserIsAnHonestError checks that a valid manifest naming a format
-// coroner knows about but cannot read yet says so, rather than being told the
-// type is unknown.
+// TestPendingParserIsAnHonestError checks that a format coroner knows about but
+// cannot read yet says so, rather than being told the type is unknown.
+//
+// Exercised directly rather than through the registry: every registered type now
+// has a real parser behind it. The placeholder stays because the next format to
+// be named before it is written should get this error and not a lie about being
+// unrecognised, and a mechanism with no test is a mechanism that has quietly
+// stopped working by the time it is needed.
 func TestPendingParserIsAnHonestError(t *testing.T) {
-	p, err := New("facebook")
-	if err != nil {
-		t.Fatalf("facebook should be a registered type: %v", err)
-	}
+	var p Parser = &pendingParser{format: "somethingnew", waitingFor: "a real export"}
 
-	err = p.Prepare(Source{})
+	err := p.Prepare(Source{})
 	if err == nil {
 		t.Fatal("the pending parser reported success")
 	}
 	if !strings.Contains(err.Error(), "not written yet") {
 		t.Errorf("the error does not explain the situation: %v", err)
+	}
+}
+
+// Substack is no longer pending, which is the thing most likely to be forgotten
+// when a placeholder is replaced.
+func TestSubstackIsImplemented(t *testing.T) {
+	if !Implemented("substack") {
+		t.Error("substack still reports as pending")
+	}
+
+	p, err := New("substack")
+	if err != nil {
+		t.Fatalf("New(\"substack\"): %v", err)
+	}
+	if _, ok := p.(*substackParser); !ok {
+		t.Errorf("New(\"substack\") = %T, want *substackParser", p)
 	}
 }
 

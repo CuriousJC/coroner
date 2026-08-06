@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/curiousjc/coroner/internal/digest"
 )
 
 // TestReorderPutsFlagsFirst guards a bug that was live: Go's flag package stops
@@ -126,6 +128,49 @@ func TestBar(t *testing.T) {
 	// nothing at all.
 	if got := bar(0.0001, 1, 10); strings.TrimSpace(got) == "" {
 		t.Errorf("a small but nonzero score rendered as an empty bar")
+	}
+}
+
+// TestQuietCountsPicksTheRightGranularity covers the reporting decision behind
+// the "most of what was read produced no text" observation: for a format whose
+// files hold thousands of records, counting files would say nothing at all.
+func TestQuietCountsPicksTheRightGranularity(t *testing.T) {
+	// A Facebook-shaped report: one file, thousands of records.
+	records := &digest.Report{Parsed: 1, RecordsSeen: 8195, RecordsEmpty: 2542}
+	seen, empty := quietCounts(records)
+	if seen != 8195 || empty != 2542 {
+		t.Errorf("record-counting parser reported %d/%d, want 8195/2542", empty, seen)
+	}
+
+	// An HTML-shaped report: many files, no record counts.
+	files := &digest.Report{Parsed: 8, EmptyFiles: []string{"a.html", "b.html"}}
+	seen, empty = quietCounts(files)
+	if seen != 10 || empty != 2 {
+		t.Errorf("file-counting parser reported %d/%d, want 2/10", empty, seen)
+	}
+}
+
+func TestQuietThresholdDoesNotFireOnANormalExport(t *testing.T) {
+	// The real Facebook export: 31% of records held no text, which is ordinary
+	// for a photo-heavy account and must not produce a warning.
+	seen, empty := quietCounts(&digest.Report{Parsed: 1, RecordsSeen: 8195, RecordsEmpty: 2542})
+	if float64(empty)/float64(seen) >= quietThreshold {
+		t.Errorf("a 31%% empty rate crossed the threshold; the warning would cry wolf on a real export")
+	}
+
+	// A parser that has broken: almost nothing came back.
+	seen, empty = quietCounts(&digest.Report{Parsed: 1, RecordsSeen: 8195, RecordsEmpty: 8100})
+	if float64(empty)/float64(seen) < quietThreshold {
+		t.Errorf("a 99%% empty rate did not cross the threshold; the warning would never fire")
+	}
+}
+
+func TestPercent(t *testing.T) {
+	if got := percent(2542, 8195); got != "31%" {
+		t.Errorf("percent(2542, 8195) = %q, want \"31%%\"", got)
+	}
+	if got := percent(0, 0); got != "0%" {
+		t.Errorf("percent(0, 0) = %q; dividing by zero must not panic", got)
 	}
 }
 

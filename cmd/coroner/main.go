@@ -8,6 +8,8 @@ main executable for coroner
 	coroner search "choice"
 	coroner search "branching logic" -hits=25 -format=json
 	coroner sources
+	coroner stats -sample=10
+	coroner links -source=source/facebook_posts
 
 // For creating an executable:::
 
@@ -15,12 +17,11 @@ main executable for coroner
 	make all
 
 //Stuff todo:::
-TODO: parser: facebook, written against a real export rather than the documented shape
-TODO: parser: substack, same
-TODO: method: dedupe, the after-the-fact pass that relates near-identical documents across corpora
-TODO: search: filter by date range, which is most of what "what was I writing about in 2019" needs
-TODO: search: -explain, showing which query terms drove a lexical hit
-TODO: digest: report which files parsed to nothing, since an export full of image-only posts looks identical to a broken parser
+Planned work lives in TODO.md at the repo root, not here. It was moved out
+because a roadmap in a header comment cannot carry the reasoning behind an item,
+and an item without its reasoning gets done wrong. In brief: the substack parser
+(now unblocked), a third HTML export awaiting bytes, cross-corpus dedupe, and two
+search refinements.
 */
 package main
 
@@ -42,8 +43,10 @@ import (
 	"github.com/curiousjc/coroner/internal/doc"
 	"github.com/curiousjc/coroner/internal/embed"
 	"github.com/curiousjc/coroner/internal/examples"
+	"github.com/curiousjc/coroner/internal/links"
 	"github.com/curiousjc/coroner/internal/parse"
 	"github.com/curiousjc/coroner/internal/search"
+	"github.com/curiousjc/coroner/internal/stats"
 	"github.com/curiousjc/coroner/internal/store"
 	"github.com/curiousjc/coroner/internal/version"
 )
@@ -91,6 +94,10 @@ func main() {
 		run(cmdSearch(args))
 	case "sources":
 		run(cmdSources(args))
+	case "links":
+		run(cmdLinks(args))
+	case "stats":
+		run(cmdStats(args))
 	case "initsource":
 		run(cmdInitSource(args))
 	case "initconfig":
@@ -102,7 +109,7 @@ func main() {
 	default:
 		corlog.Heading(true, "coroner %s", version.Version)
 		corlog.Error(true, "Unknown command %q.", cmd)
-		corlog.Detail(true, "Commands: digest, search, sources, initsource, initconfig, version, examples")
+		corlog.Detail(true, "Commands: digest, search, sources, stats, links, initsource, initconfig, version, examples")
 		corlog.Detail(true, "Try `coroner examples` for worked usage.")
 		os.Exit(1)
 	}
@@ -371,16 +378,65 @@ func cmdDigest(args []string) error {
 	return nil
 }
 
+// quietThreshold is the share of input that has to produce nothing before the
+// digest says so out loud.
+//
+// Deliberately high. Plenty of legitimate exports are mostly photographs, and a
+// tool that warns about every one of them teaches you to ignore it. Below this
+// the count is still reported, just without comment -- the number is the useful
+// part, and what it means is a judgement the person who made the export can make
+// and this program cannot.
+const quietThreshold = 0.8
+
 func reportDigest(rep *digest.Report) {
 	corlog.Detail(true, "  %s, %s parsed from %s walked",
 		rep.Type,
 		plural(rep.Parsed, "file", "files"),
 		plural(rep.Walked, "file", "files"))
 
-	corlog.Detail(true, "  %s", digest.Describe(rep))
+	// Record counts, for formats where one file holds thousands of entries and
+	// the file counts above say almost nothing.
+	if rep.RecordsSeen > 0 {
+		if rep.RecordsEmpty > 0 {
+			corlog.Detail(true, "  %s read, %s held no text (%s)",
+				plural(rep.RecordsSeen, "record", "records"),
+				comma(rep.RecordsEmpty),
+				percent(rep.RecordsEmpty, rep.RecordsSeen))
+		} else {
+			corlog.Detail(true, "  %s read", plural(rep.RecordsSeen, "record", "records"))
+		}
+	}
+
+	line := fmt.Sprintf("  %s, %s",
+		plural(rep.Documents, "document", "documents"),
+		plural(rep.Chunks, "chunk", "chunks"))
+	if rep.Reused > 0 {
+		line += fmt.Sprintf(" (%s embedded, %s reused)", comma(rep.Embedded), comma(rep.Reused))
+	}
+	corlog.Detail(true, "%s", line)
 
 	if rep.Duplicates > 0 {
 		corlog.Detail(true, "  %s dropped as duplicates within this corpus", plural(rep.Duplicates, "document", "documents"))
+	}
+
+	if n := len(rep.EmptyFiles); n > 0 {
+		corlog.Detail(true, "  %s parsed but held no text", plural(n, "file", "files"))
+		if verbose {
+			for _, f := range rep.EmptyFiles {
+				corlog.Detail(true, "    %s", f)
+			}
+		} else {
+			corlog.Detail(true, "    run again with -verbose to list them")
+		}
+	}
+
+	// The observation, not a verdict. An export that is almost entirely
+	// photographs and a parser that has quietly stopped working produce exactly
+	// the same silence, and only one of them is a problem.
+	if seen, empty := quietCounts(rep); seen > 0 && float64(empty)/float64(seen) >= quietThreshold {
+		corlog.Warn(true, "  most of what was read produced no text (%s of %s)",
+			comma(empty), comma(seen))
+		corlog.Detail(true, "    normal for a photo-heavy export, and also what a broken parser looks like")
 	}
 
 	if n := len(rep.Errors); n > 0 {
@@ -389,8 +445,27 @@ func reportDigest(rep *digest.Report) {
 			for _, e := range rep.Errors {
 				corlog.Detail(true, "    %s: %v", e.File, e.Err)
 			}
+		} else {
+			corlog.Detail(true, "    run again with -verbose to see why")
 		}
 	}
+}
+
+// quietCounts picks whichever granularity the parser actually reported at, so
+// the observation is made against records for formats that have them and files
+// for those that do not.
+func quietCounts(rep *digest.Report) (seen, empty int) {
+	if rep.RecordsSeen > 0 {
+		return rep.RecordsSeen, rep.RecordsEmpty
+	}
+	return rep.Parsed + len(rep.EmptyFiles), len(rep.EmptyFiles)
+}
+
+func percent(n, of int) string {
+	if of == 0 {
+		return "0%"
+	}
+	return fmt.Sprintf("%.0f%%", float64(n)/float64(of)*100)
 }
 
 // resolveSources works out which corpora to digest, and explains itself when
@@ -564,20 +639,25 @@ func printResults(results []search.Result) {
 		}
 		where += " · " + retrievers(r)
 
-		title := r.Doc.Title
-		if title == "" {
-			title = r.Doc.File
-		}
-
 		corlog.Row(true,
 			corlog.Seg(corlog.StylePlain, "  %3d. ", i+1),
 			corlog.Seg(corlog.StyleBar, "%s ", bar(r.Score, top, barWidth)),
 			corlog.Seg(corlog.StyleDim, " %s", where),
 		)
-		corlog.Row(true,
-			corlog.Seg(corlog.StylePlain, "       "),
-			corlog.Seg(corlog.StyleTitle, "%s", title),
-		)
+
+		// The title line is skipped rather than filled in when a source has no
+		// titles. Facebook posts have none -- the export's "title" field is
+		// chrome like "Justin Crosby updated his status." -- and falling back
+		// to the filename would print the same JSON path under every result in
+		// the corpus. The line above already says where a result came from, and
+		// the snippet says what it is.
+		if r.Doc.Title != "" {
+			corlog.Row(true,
+				corlog.Seg(corlog.StylePlain, "       "),
+				corlog.Seg(corlog.StyleTitle, "%s", r.Doc.Title),
+			)
+		}
+
 		corlog.Detail(true, "       %s", doc.Snippet(r.Chunk.Text, 150))
 		corlog.Info(true, "")
 	}
@@ -737,6 +817,254 @@ func cmdSources(args []string) error {
 		plural(len(man.Sources), "corpus", "corpora"))
 
 	return nil
+}
+
+// ---------------------------------------------------------------- links
+
+func cmdLinks(args []string) error {
+	c := newFlagSet("links")
+	source := c.fs.String("source", "", "REQUIRED: the source directory to read.")
+	out := c.fs.String("out", "links.md", "Where to write. Use - for standard output.")
+	format := c.fs.String("format", "md", "Output format: md or json.")
+	topDomains := c.fs.Int("domains", 25, "How many domains to list in the summary.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+
+	if *format != "md" && *format != "json" {
+		return fmt.Errorf("unknown format %q; use md or json", *format)
+	}
+	if *source == "" {
+		return fmt.Errorf("no -source given, so there is nothing to read.\n" +
+			"    coroner links -source=source/facebook_posts")
+	}
+
+	// Reads and parses the export but embeds nothing, so this works without
+	// ollama running. Links are not part of the corpus and never reach it.
+	man, parser, err := loadParser(*source)
+	if err != nil {
+		return err
+	}
+
+	lister, ok := parser.(parse.LinkLister)
+	if !ok {
+		return fmt.Errorf("the %s parser does not record outbound links.\n"+
+			"  Only formats that keep links as their own field can produce this;\n"+
+			"  links inside a page's markup are part of the writing, not a list", man.Type)
+	}
+
+	if *format == "md" && *out != "-" {
+		corlog.Heading(true, "coroner %s", version.Version)
+		corlog.Info(true, "")
+		corlog.Field(true, "Reading", filepath.ToSlash(*source))
+	}
+
+	if err := parseForLinks(*source, man, parser); err != nil {
+		return err
+	}
+
+	dropped := 0
+	if d, ok := parser.(interface{ DroppedLinks() int }); ok {
+		dropped = d.DroppedLinks()
+	}
+
+	rep := links.Build(man.Name, lister.Links(), dropped)
+
+	var rendered []byte
+	if *format == "json" {
+		rendered, err = json.MarshalIndent(rep, "", "  ")
+		if err != nil {
+			return err
+		}
+		rendered = append(rendered, '\n')
+	} else {
+		rendered = []byte(rep.Markdown(*topDomains))
+	}
+
+	if *out == "-" {
+		_, err := os.Stdout.Write(rendered)
+		return err
+	}
+
+	if err := os.WriteFile(*out, rendered, 0644); err != nil {
+		return err
+	}
+
+	corlog.Info(true, "")
+	corlog.Success(true, "Wrote %s to %s", plural(len(rep.Links), "link", "links"), filepath.ToSlash(*out))
+	if rep.Unique != len(rep.Links) {
+		corlog.Detail(true, "  %s distinct URLs; the rest were shared more than once", comma(rep.Unique))
+	}
+	if rep.Dropped > 0 {
+		corlog.Detail(true, "  %s recorded links pointed nowhere usable", comma(rep.Dropped))
+	}
+	if len(rep.Domains) > 0 {
+		corlog.Detail(true, "  most shared: %s (%s)", rep.Domains[0].Domain, comma(rep.Domains[0].Count))
+	}
+
+	return nil
+}
+
+// loadParser resolves a source directory to its manifest and a fresh parser.
+func loadParser(dir string) (*corpus.Manifest, parse.Parser, error) {
+	man, err := corpus.Load(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := man.Validate(parse.Types()); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", filepath.Join(dir, corpus.FileName), err)
+	}
+
+	parser, err := parse.New(man.Type)
+	if err != nil {
+		return nil, nil, err
+	}
+	return man, parser, nil
+}
+
+// parseForLinks runs the parser purely for its side effects, discarding the
+// documents. Wasteful in principle and irrelevant in practice: parsing an
+// 8,000-record export takes under a second, and the alternative is a second code
+// path through the same JSON that could drift out of step with the first.
+func parseForLinks(dir string, man *corpus.Manifest, parser parse.Parser) error {
+	src := parse.Source{Dir: dir, Name: man.Name, Type: man.Type, Author: man.Author}
+
+	if err := parser.Prepare(src); err != nil {
+		return err
+	}
+	return digest.ParseOnly(context.Background(), dir, man, parser, src)
+}
+
+// ---------------------------------------------------------------- stats
+
+func cmdStats(args []string) error {
+	c := newFlagSet("stats")
+	sourceFilter := c.fs.String("source", "", "Restrict to one corpus.")
+	format := c.fs.String("format", "table", "Output format: table or json.")
+	sampleN := c.fs.Int("sample", 0, "Also print this many documents, spread evenly through the corpus.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+
+	asJSON := *format == "json"
+	if *format != "json" && *format != "table" {
+		return fmt.Errorf("unknown format %q; use table or json", *format)
+	}
+
+	st, err := store.Open(*c.digested)
+	if err != nil {
+		return err
+	}
+
+	corpora, err := st.ReadAll()
+	if err != nil {
+		return err
+	}
+	if *sourceFilter != "" {
+		corpora = filterCorpora(corpora, *sourceFilter)
+		if len(corpora) == 0 {
+			return fmt.Errorf("no digested corpus called %q; `coroner sources` lists what there is", *sourceFilter)
+		}
+	}
+	if len(corpora) == 0 {
+		return fmt.Errorf("nothing has been digested into %s yet.\n    coroner digest", *c.digested)
+	}
+
+	rep := stats.Compute(corpora)
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		return enc.Encode(rep)
+	}
+
+	corlog.Heading(true, "coroner %s", version.Version)
+
+	for _, s := range rep.Sources {
+		printSourceStats(s)
+	}
+	if len(rep.Sources) > 1 {
+		printSourceStats(rep.Total)
+	}
+
+	if *sampleN > 0 {
+		for _, c := range corpora {
+			corlog.Info(true, "")
+			corlog.Heading(true, "  %s: %s spread through the corpus", c.Name, plural(*sampleN, "document", "documents"))
+			for _, d := range stats.Sample(c, *sampleN) {
+				when := "undated"
+				if !d.Published.IsZero() {
+					when = d.Published.Format("2006-01-02")
+				}
+				corlog.Row(true,
+					corlog.Seg(corlog.StyleDim, "    %s  ", when),
+					corlog.Seg(corlog.StylePlain, "%s", doc.Snippet(d.Text, 100)),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+func printSourceStats(s stats.Source) {
+	corlog.Info(true, "")
+	corlog.Heading(true, "  %s", s.Name)
+
+	corlog.Field(true, "Documents", fmt.Sprintf("%s in %s, %s words",
+		comma(s.Documents), plural(s.Chunks, "chunk", "chunks"), comma(s.Words)))
+
+	if !s.Earliest.IsZero() {
+		corlog.Field(true, "Span", fmt.Sprintf("%s to %s",
+			s.Earliest.Format("2006-01-02"), s.Latest.Format("2006-01-02")))
+	}
+	if s.Undated > 0 {
+		corlog.Field(true, "Undated", fmt.Sprintf("%s (%s)", comma(s.Undated), percent(s.Undated, s.Documents)))
+	}
+	if s.Empty > 0 {
+		corlog.Warn(true, "  %-12s %s documents hold no text at all", "Empty", comma(s.Empty))
+	}
+
+	corlog.Field(true, "Words/doc", spreadLine(s.WordsPerDocument))
+	corlog.Field(true, "Chunks/doc", spreadLine(s.ChunksPerDocument))
+
+	// The hapax share is the quickest signal that a corpus is real writing
+	// rather than repeated boilerplate.
+	corlog.Field(true, "Vocabulary", fmt.Sprintf("%s distinct terms, %s used once (%s)",
+		comma(s.Vocabulary), comma(s.Hapax), percent(s.Hapax, s.Vocabulary)))
+
+	if len(s.ByYear) > 0 {
+		corlog.Info(true, "")
+		printYears(s.ByYear)
+	}
+}
+
+func spreadLine(sp stats.Spread) string {
+	return fmt.Sprintf("min %s  median %s  p90 %s  p99 %s  max %s",
+		comma(sp.Min), comma(sp.P50), comma(sp.P90), comma(sp.P99), comma(sp.Max))
+}
+
+// printYears draws the histogram. A gap in it is either a year you did not write
+// or a year the parser dropped, and that is exactly the kind of thing that is
+// invisible in a total and obvious in a row of bars.
+func printYears(years []stats.YearCount) {
+	most := 0
+	for _, y := range years {
+		if y.Count > most {
+			most = y.Count
+		}
+	}
+
+	for _, y := range years {
+		corlog.Row(true,
+			corlog.Seg(corlog.StyleDim, "    %d  ", y.Year),
+			corlog.Seg(corlog.StyleBar, "%s", bar(float64(y.Count), float64(most), 28)),
+			corlog.Seg(corlog.StyleDim, " %s", comma(y.Count)),
+		)
+	}
 }
 
 // ---------------------------------------------------------------- init

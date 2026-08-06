@@ -16,6 +16,7 @@ package parse
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/curiousjc/coroner/internal/doc"
 )
@@ -60,14 +61,61 @@ type Parser interface {
 // than shared, so that whatever Prepare caches belongs to one digest and cannot
 // leak between corpora.
 var constructors = map[string]func() Parser{
-	"text": func() Parser { return &textParser{} },
-	"html": func() Parser { return &htmlParser{} },
-	"facebook": func() Parser {
-		return &pendingParser{format: "facebook", waitingFor: "a Facebook \"Download your information\" export"}
-	},
-	"substack": func() Parser {
-		return &pendingParser{format: "substack", waitingFor: "a Substack export zip, expanded"}
-	},
+	"text":     func() Parser { return &textParser{} },
+	"html":     func() Parser { return &htmlParser{} },
+	"htmlsite": func() Parser { return &htmlsiteParser{} },
+	"facebook": func() Parser { return &facebookParser{} },
+	"substack": func() Parser { return &substackParser{} },
+}
+
+// Link is one outbound link an export recorded, with whatever the author wrote
+// alongside it.
+//
+// Links are deliberately not documents. A URL tokenises into fragments that
+// mean nothing to a reader and pollute the lexical index -- "https", "www",
+// "com", a hex tracking parameter -- and there are thousands of them, so
+// indexing them would degrade every search to make one kind of lookup possible.
+// They are extracted to a separate artefact instead.
+type Link struct {
+	URL string `json:"url"`
+
+	// Title is the link's own title where the export records one, which is
+	// rarely.
+	Title string `json:"title,omitempty"`
+
+	// Comment is what the author wrote when sharing it, which is the part worth
+	// reading and the reason this is not just a list of URLs.
+	Comment string `json:"comment,omitempty"`
+
+	Published time.Time `json:"published,omitempty"`
+	File      string    `json:"file"`
+}
+
+// LinkLister is implemented by parsers whose format records outbound links.
+//
+// Optional, like RecordCounter. A directory of loose HTML has links inside its
+// markup, but they are part of the writing rather than a separate thing the
+// export chose to record, and extracting them would mean deciding which of a
+// page's navigation counted.
+type LinkLister interface {
+	// Links returns everything found across every file parsed so far, in a
+	// stable order.
+	Links() []Link
+}
+
+// RecordCounter is implemented by parsers whose files hold many records, so a
+// digest can say how much of an export contained no writing.
+//
+// Optional, because it only means something for those formats. A directory of
+// HTML files maps one file to one document, and the file counts already say
+// everything there is to say. A Facebook export is a single JSON array holding
+// thousands of records, most of which may legitimately be photographs with no
+// text -- and without this, "one file parsed, 5,653 documents" gives no way to
+// tell that from a parser that has silently started dropping things.
+type RecordCounter interface {
+	// Records reports how many records were read and how many produced no
+	// document.
+	Records() (seen, empty int)
 }
 
 // New builds the parser for a manifest type.

@@ -8,7 +8,9 @@ Your writing never leaves your machine: embeddings are computed by a local [olla
 
 ## Status
 
-Working end to end for `html` and `text` sources. The `facebook` and `substack` parsers are registered but not yet written — they are waiting on real exports to be written against rather than guessed at.
+Working end to end for `facebook`, `html` and `text` sources. The `substack` parser is registered but not yet written — it is waiting on a real export to be written against rather than guessed at.
+
+The Facebook parser was built against a real 8,195-record export and handles the things that export actually does: no post identifiers, captions stored twice, and text that arrives double-encoded so `don't` reads as `donâ€™t`.
 
 ## Install
 
@@ -39,8 +41,40 @@ coroner search "Thatcher" -mode=lexical
 coroner search "the cost of certainty" -format=json
 
 coroner sources     # what has been digested
+coroner stats       # counts, date histogram, vocabulary
 coroner examples    # worked usage for everything
+
+# Every link you shared, with what you said about it
+coroner links -source=source/facebook
 ```
+
+## Links are not part of the corpus
+
+`coroner links` writes a browsable Markdown file — links grouped by year, newest first, each with the commentary you wrote when sharing it, plus a summary of which sites you shared most.
+
+They are kept out of the searchable corpus on purpose. A URL tokenises into fragments that mean nothing to a reader and everything to a keyword index — `https`, `www`, `com`, a tracking parameter — and there are thousands of them, so indexing them would degrade every search to make one kind of lookup possible. The artefact stands on its own instead, and needs no ollama since nothing is embedded.
+
+## Checking a corpus parsed properly
+
+A corpus is not something you can read, so `coroner stats` is how you tell a good parse from a bad one:
+
+```
+  facebook
+  Documents    5,651 in 6,490 chunks, 354,093 words
+  Span         2009-08-04 to 2025-12-24
+  Words/doc    min 1  median 20  p90 131  p99 785  max 2,162
+  Vocabulary   22,077 distinct terms, 10,920 used once (49%)
+
+    2009  █                            13
+    2010  ███                          54
+    ...
+    2024  ███████████████████████████  554
+    2025  █████████████████            358
+```
+
+A gap in the year histogram is either a year you did not write or a year the parser dropped. A suspiciously tight word-count spread means text is being truncated. A low share of once-used words means you are indexing boilerplate rather than writing. None of those are visible in a total.
+
+`coroner digest` reports the same instinct: it counts records that produced no text, and says so out loud only when that share passes 80% — high enough that a legitimately photo-heavy export does not train you to ignore the warning.
 
 ## How searching works
 
