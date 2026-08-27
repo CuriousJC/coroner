@@ -49,6 +49,17 @@ type Manifest struct {
 	// Notes is free text, for you. Coroner never reads it.
 	Notes string `yaml:"notes"`
 
+	// Priority ranks this corpus against the others when the same piece of
+	// writing appears in several, higher winning. Only `coroner dupes` reads
+	// it, and only to decide which copy of a group it names as the real one.
+	//
+	// A number rather than an ordered list of corpus names, because the rule
+	// belongs beside the corpus it describes: a list would have to live
+	// somewhere central and be kept in step with every source directory by
+	// hand. Unset is zero, which loses to anything ranked -- so a corpus nobody
+	// has thought about does not silently outrank one somebody has.
+	Priority int `yaml:"priority"`
+
 	// Include narrows which files the parser is offered, as globs matched
 	// against the path relative to the source directory. Empty means the
 	// parser's own default, which is usually right.

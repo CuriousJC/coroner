@@ -41,6 +41,7 @@ import (
 	"github.com/curiousjc/coroner/internal/corpus"
 	"github.com/curiousjc/coroner/internal/digest"
 	"github.com/curiousjc/coroner/internal/doc"
+	"github.com/curiousjc/coroner/internal/dupes"
 	"github.com/curiousjc/coroner/internal/embed"
 	"github.com/curiousjc/coroner/internal/examples"
 	"github.com/curiousjc/coroner/internal/links"
@@ -98,6 +99,8 @@ func main() {
 		run(cmdLinks(args))
 	case "stats":
 		run(cmdStats(args))
+	case "dupes":
+		run(cmdDupes(args))
 	case "initsource":
 		run(cmdInitSource(args))
 	case "initconfig":
@@ -109,7 +112,7 @@ func main() {
 	default:
 		corlog.Heading(true, "coroner %s", version.Version)
 		corlog.Error(true, "Unknown command %q.", cmd)
-		corlog.Detail(true, "Commands: digest, search, sources, stats, links, initsource, initconfig, version, examples")
+		corlog.Detail(true, "Commands: digest, search, sources, stats, dupes, links, initsource, initconfig, version, examples")
 		corlog.Detail(true, "Try `coroner examples` for worked usage.")
 		os.Exit(1)
 	}
@@ -1065,6 +1068,143 @@ func printYears(years []stats.YearCount) {
 			corlog.Seg(corlog.StyleDim, " %s", comma(y.Count)),
 		)
 	}
+}
+
+// ---------------------------------------------------------------- dupes
+
+func cmdDupes(args []string) error {
+	c := newFlagSet("dupes")
+	format := c.fs.String("format", "table", "Output format: table or json.")
+	window := c.fs.Int("window", dupes.DefaultWindow, "Days apart two documents may be dated and still be compared.")
+	threshold := c.fs.Float64("threshold", dupes.DefaultThreshold, "Minimum shingle overlap, 0 to 1, for two documents to be called the same writing.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+
+	asJSON := *format == "json"
+	if *format != "json" && *format != "table" {
+		return fmt.Errorf("unknown format %q; use table or json", *format)
+	}
+	if *threshold <= 0 || *threshold > 1 {
+		return fmt.Errorf("-threshold must be above 0 and at most 1, got %v", *threshold)
+	}
+	if *window < 0 {
+		return fmt.Errorf("-window cannot be negative, got %d", *window)
+	}
+
+	st, err := store.Open(*c.digested)
+	if err != nil {
+		return err
+	}
+
+	corpora, err := st.ReadAll()
+	if err != nil {
+		return err
+	}
+	if len(corpora) == 0 {
+		return fmt.Errorf("nothing has been digested into %s yet.\n    coroner digest", *c.digested)
+	}
+	if len(corpora) < 2 {
+		return fmt.Errorf("only one corpus is digested, so there is nothing to compare it against.\n" +
+			"    dupes looks for the same writing in different corpora; duplicates within one\n" +
+			"    corpus are dropped at digest time. `coroner sources` lists what there is.")
+	}
+
+	man, err := st.LoadManifest()
+	if err != nil {
+		return err
+	}
+
+	opts := dupes.Defaults()
+	opts.Window = *window
+	opts.Threshold = *threshold
+	opts.Priority = map[string]int{}
+	for _, si := range man.Sources {
+		opts.Priority[si.Name] = si.Priority
+	}
+
+	rep := dupes.Find(corpora, opts)
+
+	if asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		return enc.Encode(rep)
+	}
+
+	printDupes(rep, opts)
+	return nil
+}
+
+func printDupes(rep dupes.Report, opts dupes.Options) {
+	corlog.Heading(true, "coroner %s", version.Version)
+	corlog.Info(true, "")
+
+	// Say what the pass did before what it found. A run that compared far fewer
+	// documents than the corpus holds has hit undated documents, and that is
+	// worth noticing before reading the groups.
+	corlog.Field(true, "Compared", fmt.Sprintf("%s dated documents, +/-%s, overlap >= %.2f",
+		comma(rep.Compared), plural(rep.Window, "day", "days"), rep.Threshold))
+
+	if len(rep.Groups) == 0 {
+		corlog.Info(true, "")
+		corlog.Detail(true, "No document appears in more than one corpus.")
+		return
+	}
+
+	corlog.Field(true, "Found", fmt.Sprintf("%s in %s",
+		plural(rep.Duplicated, "document", "documents"),
+		plural(len(rep.Groups), "group", "groups")))
+
+	unranked := true
+	for _, p := range opts.Priority {
+		if p != 0 {
+			unranked = false
+		}
+	}
+	if unranked {
+		corlog.Warn(true, "  %-12s no corpus sets `priority` in its corpus.yaml, so the winner in each",
+			"Unranked")
+		corlog.Detail(true, "               group below is only the first by corpus name. Set priority and re-digest.")
+	}
+
+	for _, g := range rep.Groups {
+		corlog.Info(true, "")
+
+		when := "undated"
+		if !g.Members[0].Date.IsZero() {
+			when = g.Members[0].Date.Format("2006-01-02")
+		}
+		corlog.Heading(true, "  %s  (weakest match %.2f)", when, g.Lowest)
+
+		for _, m := range g.Members {
+			mark := "  "
+			style := corlog.StyleDim
+			if m.DocID == g.Winner {
+				// The winner is marked rather than reordered away: seeing what
+				// it beat, and by how much, is most of what the report is for.
+				mark = "->"
+				style = corlog.StylePlain
+			}
+			corlog.Row(true,
+				corlog.Seg(corlog.StyleDim, "    %s ", mark),
+				corlog.Seg(style, "%-16s ", m.DocID),
+				corlog.Seg(corlog.StyleDim, "%-16s ", m.Source),
+				corlog.Seg(style, "%.2f  ", m.Score),
+				corlog.Seg(style, "%s", firstNonEmpty(m.Title, m.Snippet)),
+			)
+		}
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------- init

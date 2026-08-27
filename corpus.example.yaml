@@ -17,6 +17,12 @@ type: html
 # means re-digesting from scratch. Lowercase letters, digits, - and _.
 name: example
 
+# Rank this corpus against the others when the same piece of writing turns
+# up in more than one of them. Higher wins. Only `coroner dupes` reads it,
+# and only to say which copy it treats as the real one -- nothing is hidden
+# from search either way. Unset is 0, which loses to anything ranked.
+# priority: 10
+
 # Provenance, used when the export itself does not carry it.
 # author: "Your Name"
 # title: "What this body of work is"
