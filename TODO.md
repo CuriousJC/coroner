@@ -36,33 +36,38 @@ and whether that is the end state or a stepping stone is genuinely open.
 
 ---
 
-## Where things stand — 2026-08-06
+## Where things stand — 2026-08-27
 
 **All five parsers are written**: `text`, `html`, `htmlsite`, `facebook`,
 `substack`. Nothing in `parse.constructors` is pending. `pendingParser` survives
 unregistered, exercised directly by its test, so the next format named before it
 is written gets "not written yet" rather than a lie about being unrecognised.
 
-**Branch and PR.** `main` is at **`b200e11`**. Two PRs merged on 2026-08-06:
-[#3](https://github.com/CuriousJC/coroner/pull/3) (the five parsers, links,
-stats, TODO.md) and [#4](https://github.com/CuriousJC/coroner/pull/4)
-(`workflow_dispatch` plus the first-digest findings). PR #2 was closed as
-superseded.
+**`coroner dupes` ships**, and is the last thing on the old plan. Mechanism and
+the measurements behind it are in CLAUDE.md.
 
-**Branch `fix/ci-outage-note`**, off `b200e11`, corrects the CI diagnosis in
-`TODO.md` and `.github/workflows/ci.yml` — the first version of both blamed the
-workflow file and the repo's Actions settings, and the cause turned out to be a
-GitHub outage. Opening that PR is also the cheapest way to find out whether the
-`pull_request` trigger fires again, which the outage left untested.
+**Branch and PR.** `main` is at **`446f6b2`**, and **`main` is the only branch
+that exists**, locally and on the remote — every merged branch has been deleted.
+Merged so far: [#3](https://github.com/CuriousJC/coroner/pull/3) (five parsers,
+links, stats), [#4](https://github.com/CuriousJC/coroner/pull/4)
+(`workflow_dispatch`), [#5](https://github.com/CuriousJC/coroner/pull/5) (CI
+diagnosis corrected), [#6](https://github.com/CuriousJC/coroner/pull/6)
+(`coroner dupes`). #1 was the scaffolding; #2 was closed as superseded.
 
-The three merged branches — `updates-1`, `feature/digest-milestone` and
-`feature/initial-scaffolding` — were deleted locally and on the remote. The last
-of those was never an ancestor of `main`: its tip `31a3d14` was cherry-picked
-onto `updates-1` as `31b6b46`, so the content is on `main` under a different
-hash and the branch was superseded rather than abandoned.
+**CI is healthy and has run against everything on `main`.** The 2026-08-06
+Actions outage is long over, `pull_request` triggers fire normally, and
+`go test -race` has covered every parser. Nothing is outstanding here.
 
-**The corpus is digested.** All three sources, 5,974 documents in 7,977 chunks,
-in 2m32s. Counts came out exactly as predicted:
+**The corpus is digested**, and re-digested as of 2026-08-27 to carry the
+`priority` field. All three sources, 5,974 documents in 7,977 chunks. The first
+build took 2m32s; the re-digest reused every chunk and took **1.1s**, which is
+worth knowing before anyone hesitates to re-digest for a metadata change.
+
+**The `priority` values live in `source/*/corpus.yaml`, which is gitignored.**
+So a fresh clone has no priorities and `coroner dupes` will print its "Unranked"
+warning until they are set: `substack_posts: 30`, `html_posts: 20`,
+`facebook_posts: 10`, followed by a re-digest. This is the one piece of local
+state that cannot be recovered from the repo.
 
 | directory | manifest `type` | manifest `name` | documents | chunks |
 | --- | --- | --- | --- | --- |
@@ -130,35 +135,19 @@ which is exactly the recovery case.
 
 ## Immediate next steps
 
-1. ~~**Dedupe, as a report.**~~ **Done, 2026-08-27.** `coroner dupes` ships with
-   `-format=json`, `-window` and `-threshold`. On the real corpus it finds **177
-   groups covering 378 documents**. Mechanism and the measurements behind it are
-   in CLAUDE.md; this file keeps only what is still open.
-
-   Priority is live: the three `source/*/corpus.yaml` files carry 30/20/10 and
-   the corpus was re-digested to copy them into the digested manifest. That
-   re-digest reused every one of the 7,977 chunks and took **1.1s against the
-   original 2m32s**, which is the incremental design doing exactly what it was
-   built for — worth knowing before anyone hesitates to re-digest for a metadata
-   change.
-
-   **The pass cross-checks against the standalone measurement exactly**: 23
-   three-way chains, 2 `substack`+`facebook`, 1 `substack`+`html`, 26 Substack
-   documents and 175 HTML documents involved — all matching numbers derived
-   independently in Python before the Go was written. Winners land 151
-   `html_posts` and 26 `substack_posts`, `facebook_posts` never, and no group
-   contains a member outranking its own winner.
-2. **The viewer** — see "A front end for the corpus" below. This is the next
-   real piece of work.
-3. **Show the document ID in human search output** — small, and argued below to
+1. **The viewer** — see "A front end for the corpus" below. This is the next
+   real piece of work, and it is three steps of which the first is already done.
+2. **Show the document ID in human search output** — small, and argued below to
    matter more than its size. Worth doing alongside the viewer, since both are
    about referring to a piece of writing by one stable handle.
-4. **Revisit embeddings** when there is something to judge them against, which
+3. **Revisit embeddings** when there is something to judge them against, which
    means an evaluation set only Justin can supply.
 
-The CI item that used to head this list is done — see above. If CI ever goes
-quiet again, check <https://www.githubstatus.com> before suspecting the repo,
-then `gh workflow run ci.yml --ref main`.
+Two items that used to head this list are done and should not be restarted: CI
+by hand (the outage is over, and everything on `main` has been through
+`go test -race`) and the dedupe report (`coroner dupes`, merged as #6). If CI
+ever goes quiet again, check <https://www.githubstatus.com> before suspecting
+the repo, then `gh workflow run ci.yml --ref main`.
 
 Deliberately not next: corpus balance, and any change to how search ranks. See
 the decisions below.
@@ -387,6 +376,18 @@ above turned out to matter for grouping as well as for scoring, and the pass
 unions matches transitively rather than resolving pairs, because the three-way
 chain is the common case.
 
+**It cross-checks against the standalone measurement exactly**: 23 three-way
+chains, 2 `substack`+`facebook`, 1 `substack`+`html`, 26 Substack and 175 HTML
+documents involved — every number matching what was derived independently in
+Python before any Go was written. Winners land 151 `html_posts` and 26
+`substack_posts`, `facebook_posts` never, and no group holds a member
+outranking its own winner.
+
+The throwaway Python used for those measurements was not kept, and does not need
+to be: `coroner dupes -format=json` emits everything those scripts computed, and
+the quote-folding comparison they were written to settle is now asserted by a
+test in `internal/dupes`.
+
 ### A front end for the corpus
 
 **Decided 2026-08-27.** Justin's framing: a website that shows the breadth of
@@ -606,6 +607,19 @@ Small, low-risk, none urgent.
 
 ## Done
 
+- **`coroner dupes`** (2026-08-27), merged as
+  [#6](https://github.com/CuriousJC/coroner/pull/6). The cross-corpus dedupe
+  pass, plus a `priority` field in `corpus.yaml` carried into the digested
+  manifest. 177 groups over 378 documents. Mechanism in CLAUDE.md.
+- **The two Substack pairs measured** (2026-08-27). The prerequisite the dedupe
+  section had recorded for itself. Result: the method transferred unchanged, the
+  empty 0.2–0.5 band holds on all three pairs, and one correction fell out of it
+  — quote folding at comparison time.
+- **CI diagnosis corrected** (2026-08-27), merged as
+  [#5](https://github.com/CuriousJC/coroner/pull/5). The 2026-08-06 CI silence
+  was a GitHub Actions outage, not the workflow file or the repo settings. The
+  same PR got `main`'s parsers through `go test -race` for the first time, since
+  a docs-only branch shares `main`'s Go code exactly.
 - **Milestone: one searchable corpus** (2026-08-06). All three sources digest
   cleanly and `coroner search` spans them. No architecture change was needed —
   `digested/` already held one set of files per corpus and search already loaded
