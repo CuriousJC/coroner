@@ -130,11 +130,30 @@ which is exactly the recovery case.
 
 ## Immediate next steps
 
-1. **Dedupe, as a report** — see below. It now has measurements rather than
-   guesses, and the shape is settled. This is the next real piece of work.
-2. **Show the document ID in human search output** — small, and argued below to
-   matter more than its size.
-3. **Revisit embeddings** when there is something to judge them against, which
+1. ~~**Dedupe, as a report.**~~ **Done, 2026-08-27.** `coroner dupes` ships with
+   `-format=json`, `-window` and `-threshold`. On the real corpus it finds **177
+   groups covering 378 documents**. Mechanism and the measurements behind it are
+   in CLAUDE.md; this file keeps only what is still open.
+
+   Priority is live: the three `source/*/corpus.yaml` files carry 30/20/10 and
+   the corpus was re-digested to copy them into the digested manifest. That
+   re-digest reused every one of the 7,977 chunks and took **1.1s against the
+   original 2m32s**, which is the incremental design doing exactly what it was
+   built for — worth knowing before anyone hesitates to re-digest for a metadata
+   change.
+
+   **The pass cross-checks against the standalone measurement exactly**: 23
+   three-way chains, 2 `substack`+`facebook`, 1 `substack`+`html`, 26 Substack
+   documents and 175 HTML documents involved — all matching numbers derived
+   independently in Python before the Go was written. Winners land 151
+   `html_posts` and 26 `substack_posts`, `facebook_posts` never, and no group
+   contains a member outranking its own winner.
+2. **The viewer** — see "A front end for the corpus" below. This is the next
+   real piece of work.
+3. **Show the document ID in human search output** — small, and argued below to
+   matter more than its size. Worth doing alongside the viewer, since both are
+   about referring to a piece of writing by one stable handle.
+4. **Revisit embeddings** when there is something to judge them against, which
    means an evaluation set only Justin can supply.
 
 The CI item that used to head this list is done — see above. If CI ever goes
@@ -211,8 +230,10 @@ that is itself displacing a Facebook post, and the pass has to resolve the chain
 rather than a pair.
 
 The detailed measurements below are the `html_posts` → `facebook_posts` pair,
-which was measured first and most closely. The other two pairs have not been
-broken down the same way, and should be before the pass is written.
+which was measured first and most closely. **The other two pairs have now been
+broken down the same way — see "The two Substack pairs" below.** The headline
+conclusion is that the method transfers unchanged, with one correction to make
+before the pass is written.
 
 - **171 of the 189 `html_posts` share a date with at least one Facebook post**
   (176 distinct dates in `html_posts`, 171 of them present in `facebook_posts`).
@@ -232,14 +253,107 @@ broken down the same way, and should be before the pass is written.
   them are titled `Small Government (NEVER POSTED)` and `Two Parents (NEVER
   POSTED)`, which is the author's own record of the fact.
 
+#### The two Substack pairs — measured 2026-08-27
+
+Measured against the same digested corpus, same method: 5-word-shingle Jaccard
+against candidates within a date window. The `html_posts` → `facebook_posts`
+pair was re-run first as a control and reproduced exactly — 175 overlapping at
+93%, 169 at ≥0.8, 3 by `ContentHash`, empty 0.2–0.5 band — so the numbers below
+come from the same measurement, not a different one that happens to agree.
+
+| from | against | ≥0.8 | 0.5–0.8 | 0.2–0.5 | <0.2 | ≥0.5 total |
+| --- | --- | --- | --- | --- | --- | --- |
+| `substack_posts` (134) | `facebook_posts` | 15 | 10 | **0** | 109 | 25 (19%) |
+| `substack_posts` (134) | `html_posts` | 14 | 10 | **0** | 110 | 24 (18%) |
+| `html_posts` (189) | `facebook_posts` | 169 | 6 | **0** | 14 | 175 (93%) |
+
+Four things follow, and they settle most of what was open.
+
+**The empty middle is a property of the data, not of hand-copying.** That was
+the open worry: the 0.2–0.5 gap might have been an artefact of the HTML site
+being copied out of Facebook by hand, in which case Substack — genuinely
+rewritten — would smear across the middle and force a threshold argument. It
+does not. **All three pairs have exactly zero documents scoring 0.2–0.5.**
+Anything from about 0.5 to 0.8 draws the same line on every pair, so the
+threshold needs no tuning and no evaluation set.
+
+**The date window is not sensitive.** ±2 and ±3 days produce byte-identical
+results on all three pairs. Keep ±2; it is cheaper and nothing is lost.
+
+**It is genuinely a chain, and the chain is the common case.** Of the 26
+Substack documents matching anything, **23 match in both other corpora**, 1 only
+in `html_posts`, 2 only in `facebook_posts`. So the pass cannot resolve pairs
+and union the results — the dominant shape is one piece of writing present three
+times, and precedence has to pick one winner from a group of three. This is what
+the earlier two-way framing would have got wrong.
+
+**`ContentHash` is useless across every pair, not just the measured one**: 0 for
+`substack`→`facebook`, 0 for `substack`→`html`, 3 for `html`→`facebook`. The
+deferral was right for all three.
+
+#### One correction to make before writing the pass: fold quote characters
+
+Every one of the 10 Substack documents in the 0.5–0.8 band was read. **All ten
+are the same post, not partial reuse** — there is no ambiguous class here to
+design around. The depressed score has three identifiable causes, and one of
+them is a defect in the comparison rather than a fact about the writing.
+
+The corpora disagree about apostrophes, and the disagreement is near-total:
+
+| corpus | `U+0027` straight | `U+2019` curly |
+| --- | --- | --- |
+| `substack_posts` | 643 | **2,831** |
+| `html_posts` | 4,377 | 47 |
+| `facebook_posts` | 10,770 | 1,367 |
+
+Substack is 81% typographic; the HTML site is 99% straight. Since the tokeniser
+treats `'` as a word character, every contraction — and English prose is full of
+them — produces a different token on each side, and a 5-word shingle spanning
+one contraction is destroyed. This is why the Substack pairs top out at **0.99
+with not a single exact 1.00**, while `html_posts` → `facebook_posts` has 86.
+
+Folding `U+2019/2018/201C/201D/2014/2013/00A0` to their ASCII equivalents before
+shingling was measured:
+
+| pair | ≥0.5 | ≥0.8 | ==1.00 |
+| --- | --- | --- | --- |
+| `substack`→`facebook` | 25 → 25 | 15 → **22** | 0 → 0 |
+| `substack`→`html` | 24 → 24 | 14 → **21** | 0 → 0 |
+| `html`→`facebook` | 175 → 175 | 169 → 170 | 86 → **88** |
+
+Read that carefully, because it decides how much this matters: **folding does
+not change which documents are detected** — the ≥0.5 sets are identical — it
+changes the score they are reported with. So the pass would work without it. But
+the report exists to be read and trusted, and a real duplicate labelled 0.63
+because of an apostrophe convention invites exactly the "is this threshold
+right?" second-guessing the empty middle otherwise makes unnecessary. Fold, and
+say in the output that scores are computed on folded text.
+
+Note this is a **comparison-time** fold only. It must not touch `doc.Normalise`
+or anything upstream of a document ID — the corpora legitimately differ here,
+and rewriting the stored text would change every Substack ID and force a
+re-digest to fix a reporting nicety.
+
+The other two causes are real differences and should be left alone: Substack
+prepends its subtitle and often a date line to the body (both deliberate, both
+recorded in CLAUDE.md), and the writing is genuinely edited between versions —
+one pair pseudonymises a name that appears in clear in the Facebook original.
+Nothing scoring ≥0.5 was a false positive, so no exclusion rule is needed.
+
+One incidental find worth keeping: `Post Debate Disaster: Biden v. Trump` opens
+with the author's own note, "This was written elsewhere and migrated here."
+Where such a marker exists it corroborates the detection, but only 1 of 26 has
+one, so it is not a signal to build on.
+
 Remaining open questions:
 
-- **What signal?** Largely answered: **date proximity plus 5-shingle Jaccard**,
-  measured above, is decisive on this data and needs no embeddings. Embedding
-  cosine was the other candidate and would have meant a judgement call about a
-  threshold; shingling turned out not to. Worth keeping the ±2 day window — it
-  is what makes the comparison cheap enough to run brute force, and every corpus
-  has reliable dates.
+- **What signal?** **Settled.** Date proximity within ±2 days plus 5-shingle
+  Jaccard on quote-folded text, threshold anywhere in 0.5–0.8. Now measured on
+  all three pairs rather than one: the empty 0.2–0.5 band holds throughout, and
+  ±2 and ±3 give identical results, so neither the threshold nor the window
+  needs tuning and no embeddings are involved. Embedding cosine was the other
+  candidate and would have meant a judgement call about a threshold; shingling
+  turned out not to.
 - **Does the result change what search returns, or is it a separate report?**
   **Settled (Justin, 2026-08-06): a report, and nothing else.** Search behaviour
   does not change — no filtering, no suppression, not even behind a flag until
@@ -256,16 +370,94 @@ Remaining open questions:
   have been read and trusted — and report-first is the right first step either
   way. But if the report is ever treated as the finished feature, the goal has
   not been met. Decide deliberately rather than by drift.
-- **Where does precedence live?** Still open. A `priority` field in `corpus.yaml`
-  is the natural home: it generalises without hardcoding three corpus names, and
-  keeps the rule beside the data it describes. Less urgent now that the pass only
-  reports — a wrong priority produces a misleading line rather than a hidden
-  document.
+- **Where does precedence live?** **Settled (Justin, 2026-08-27): a `priority`
+  field in `corpus.yaml`**, carrying `substack` > `htmlsite` > `facebook`. It
+  generalises without hardcoding three corpus names and keeps the rule beside
+  the data it describes. Lower stakes than it looks while the pass only reports
+  — a wrong priority produces a misleading line, not a hidden document — so it
+  does not need to be perfect before it is useful. Add it to the manifest
+  starter and `corpus.example.yaml`, remembering that
+  `TestExampleManifestMatchesGenerator` will fail until both move together.
 
-Shape, given the above: a `coroner dupes` subcommand that loads the digested
-corpus, groups near-duplicates by date proximity and 5-shingle Jaccard, and
-prints each group with its score and its precedence winner. It reads
-`digested/` only, so it needs no ollama and cannot corrupt anything.
+**Built as described, 2026-08-27.** `internal/dupes` plus a `coroner dupes`
+subcommand; mechanism and measurements now live in CLAUDE.md. What the real
+corpus gives: **177 groups covering 378 documents**. One thing worth knowing
+that only showed up on the real data — the quote-folding correction described
+above turned out to matter for grouping as well as for scoring, and the pass
+unions matches transitively rather than resolving pairs, because the three-way
+chain is the common case.
+
+### A front end for the corpus
+
+**Decided 2026-08-27.** Justin's framing: a website that shows the breadth of
+his writing by date, with snippets, serving both the combined-corpus view and
+the dupes report. That instinct is right, and it is a better answer to the goal
+at the top of this file than a terminal report is — the report tells you where
+the duplicates are and still leaves you holding the question. A duplicate group
+is an annotation on a date-ordered list, not a separate kind of thing, so one
+data file serves both views.
+
+**What the dupes report does not cover, and why that shapes the viewer.**
+Measured 2026-08-27, and worth stating because "`facebook_posts` never wins a
+group" is easy to misread as a claim about the whole corpus:
+
+| corpus | total | in a group | alone |
+| --- | --- | --- | --- |
+| `facebook_posts` | 5,651 | 176 | **5,475 (97%)** |
+| `html_posts` | 189 | 176 | 13 (7%) |
+| `substack_posts` | 134 | 26 | 108 (81%) |
+
+Facebook loses every group it is in, which is correct — where a post exists in
+more than one corpus, Facebook is by construction the raw original. But that is
+a statement about 176 documents. **97% of Facebook exists nowhere else and never
+appears in the report at all.**
+
+That remainder is not all status updates: **576 of it is 100+ words, 200 is
+200+, and 59 is 400+**, up to a 1,209-word maximum. Those are substantial pieces
+that never reached the site or Substack. The `html_posts` row is the mirror
+image and confirms the curation story — only 13 of 189 HTML posts are not also
+on Facebook, so the site really is a hand-picked selection.
+
+**So the viewer should not be scoped as "dupes with a UI".** Dedupe answers
+"which copy is real" for about 3% of the corpus. The larger and more interesting
+thing to surface is the writing that exists in exactly one place and has been
+lost track of — which is the scattering problem at the top of this file. A
+duplicate group is an annotation on that view, not its organising principle.
+
+**Three steps, each shippable, in this order:**
+
+1. ~~`coroner dupes`~~ — done. Getting the pass right first means the front end
+   is built against a real contract rather than one invented alongside it.
+2. **`coroner export -o site.json`** — one file: documents, dates, titles,
+   snippets, and duplicate groups with their precedence winner. **This is the
+   seam, and the point of it is that the front end never reads `digested/`
+   directly.**
+3. **The SPA**, in `web/`, reading that file. End state is `coroner serve`:
+   the Go binary serves it on localhost with the built assets baked in via
+   `go:embed`, so the single-binary property survives and the corpus never
+   leaves the machine.
+
+**Two objections raised and answered, recorded so they are not rediscovered:**
+
+- **Privacy is the one that matters.** `source/` and `digested/` are gitignored
+  because the methods are public and the writing is not. A Vite build wants to
+  bundle its data and the natural thing to do with a `dist/` is commit or deploy
+  it — that is one careless `git add -f` from publishing the whole corpus. The
+  design has to make that *structurally* hard, not discourage it in a comment.
+  Same reason nothing here goes to a hosted preview service.
+- **The single-binary contract.** Adding node, a lockfile and a second CI
+  toolchain is a real departure from "one Go binary, four dependencies". Judged
+  worth it, but as a decision rather than a side effect.
+
+**Payload is not a constraint**, measured: snippets for the whole corpus are
+**1.3 MB**, full text **5.3 MB**. So React is a choice about interaction comfort
+— a virtualised list over ~6,000 items, date filtering — and not about scale.
+Anyone revisiting this should know a plain page would also have worked.
+
+**Cost to name for step 3:** `go:embed` needs the built assets present at
+compile time, so either `web/dist` is committed or CI builds it. CI builds it.
+Also: `internal/embed` already means ollama embeddings here, so the asset
+package needs a different name.
 
 ### Corpus balance — observed, deliberately not acted on
 

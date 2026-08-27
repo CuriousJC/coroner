@@ -578,6 +578,7 @@ func updateManifest(opts Options, man *corpus.Manifest, rep *Report) error {
 	m.SetSource(store.SourceInfo{
 		Name:           man.Name,
 		Type:           man.Type,
+		Priority:       man.Priority,
 		Documents:      rep.Documents,
 		Chunks:         rep.Chunks,
 		SourceDir:      filepath.ToSlash(abs),

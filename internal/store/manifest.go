@@ -80,6 +80,13 @@ type SourceInfo struct {
 	Documents int `yaml:"documents"`
 	Chunks    int `yaml:"chunks"`
 
+	// Priority is copied from the source manifest at digest time. It lives here
+	// so `coroner dupes` can read the digested directory and nothing else: a
+	// pass that also had to resolve and re-read every source manifest could
+	// disagree with the corpus it is describing, and would fail on a digested
+	// directory whose exports have since been moved.
+	Priority int `yaml:"priority,omitempty"`
+
 	// SourceDir is where the export was read from, for your reference. It is
 	// provenance only; nothing resolves against it.
 	SourceDir string `yaml:"source_dir,omitempty"`

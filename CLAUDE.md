@@ -26,6 +26,9 @@ coroner search "branching logic" -hits=25 -format=json
 coroner sources
 coroner stats
 coroner stats -sample=10
+coroner links
+coroner dupes
+coroner dupes -format=json -threshold=0.8
 ```
 
 A single test: `go test ./internal/doc -run TestSplitIsDeterministic -v`.
@@ -64,6 +67,43 @@ Links are deliberately **not documents**. A URL tokenises into fragments that me
 `coroner links` runs through `digest.ParseOnly`, which shares the walk and worker pool with `Run` but discards the documents and embeds nothing — so it works with ollama absent. Sharing that path is deliberate: a second route through the same export could drift out of step with the first.
 
 Two measured details: the export repeats one `external_context` across a record's attachments, which accounted for 317 of 2,848 entries, so the same URL at the same second is deduplicated — but the same URL at a *different* time is a genuine re-share and is kept, because when you shared something again is what you would be reading the file to find out. And `t.co` is a third of all links: Twitter cross-posts, opaque and mostly dead, but they carry commentary so they are not dropped.
+
+**Dupes:** `internal/dupes` finds the same piece of writing recorded in more than
+one corpus and names which copy wins. It reads `digested/` only — no ollama, no
+writes — so it cannot corrupt anything, and `coroner dupes -format=json` is what
+a future viewer would read.
+
+The measured facts it is built on, all against the real 5,974-document corpus:
+
+- **`ContentHash` is useless here.** The HTML posts were copied out of Facebook
+  by hand, so hash equality finds 3 of ~175 real duplicates in that pair and 0
+  of the 49 across the two Substack pairs. Date proximity plus 5-word-shingle
+  Jaccard is what separates them.
+- **The thresholds are constants because the data has an empty middle.** Across
+  all three corpus pairs, *no* document scores between 0.2 and 0.5 against its
+  best match, so anything in 0.5–0.8 draws the same line and there is nothing to
+  tune. A ±2 and a ±3 day window give identical results; ±2 is cheaper.
+- **Quote folding is required, and only at comparison time.** Substack is 81%
+  typographic apostrophes, the HTML site 99% straight. Since `'` is a word
+  character to the tokeniser, every contraction breaks a shingle. Folding does
+  not change *which* documents are detected but lifts 14 Substack matches from
+  0.5–0.8 into ≥0.8. It must never move upstream of a document ID — the corpora
+  legitimately differ, and rewriting stored text would renumber every Substack
+  document to fix a reporting nicety.
+- **Groups, not pairs.** 23 of the 26 overlapping Substack documents are
+  three-way chains — Substack displacing HTML displacing Facebook — so matches
+  are unioned into groups. Resolving pairs independently would report the same
+  writing two or three times.
+- **Only cross-corpus pairs are compared.** Duplicates within one corpus are
+  dropped at digest time; two similar posts in the same corpus are the author
+  repeating himself, which is writing.
+
+Precedence comes from `priority` in each `corpus.yaml`, higher winning, copied
+into the digested manifest at digest time so the pass stays digested-only. Unset
+is 0, which loses to anything ranked. Ties break on corpus name then document ID
+— arbitrary but fixed, which is honest where "longest wins" would look like a
+judgement nobody made. **The pass only reports**: search behaviour is unchanged,
+nothing is filtered or suppressed.
 
 **Stats:** `internal/stats` describes a digested corpus — counts, date histogram, length spreads, vocabulary. It exists because a corpus is not something you can eyeball: five thousand documents you cannot read are indistinguishable from five thousand that parsed badly, and parser failures are quiet. Text truncated at the first newline shows up as a suspiciously tight word-count spread; a dropped year shows up as a gap in the histogram; boilerplate shows up as a low hapax share. `coroner stats -sample=N` prints documents spread evenly through the corpus rather than from the front, since documents are sorted by a hash and the first few are a fixed arbitrary slice that would hide a parser failing on later records.
 
@@ -222,4 +262,4 @@ Present as written — don't treat them as bugs to fix unless asked:
 
 Planned work lives in `TODO.md` at the repo root. Check there before proposing new subcommands. It carries the reasoning behind each item as well as the item, which a header comment could not, and it is also where anything Claude needs from Justin — an export not yet handed over, a decision not yet made — is recorded so it survives the end of a session.
 
-All five parsers are written. The near-term item is the cross-corpus dedupe pass, which now has a settled precedence order — `substack` > `htmlsite` > `facebook` — and one measured complication: the HTML posts were copied out of Facebook *by hand*, so `ContentHash` equality will catch almost none of the real overlap and the pass needs near-duplicate detection rather than hash matching.
+All five parsers are written, and `coroner dupes` ships. The near-term item is a viewer: `coroner export` writing a single JSON of documents, dates, snippets and duplicate groups, and a React/Vite front-end reading it. The corpus is private, so whatever is built must make publishing it structurally hard rather than merely discouraged.
