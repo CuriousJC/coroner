@@ -93,21 +93,32 @@ is healthy: `actions/permissions` reports `enabled: true` and
 **The outage is over** — GitHub reported Actions `operational` with no
 unresolved incidents later the same evening. **The missed runs did not replay.**
 Nothing was queued and flushed; those three triggers are simply gone, which is
-why `workflow_dispatch` earns its place and why step 1 below is still open.
+why `workflow_dispatch` earns its place.
 
 **Check <https://www.githubstatus.com> first when CI does not fire.** It is the
 cheapest diagnostic there is, and skipping it cost an afternoon of suspecting
 the workflow file, the triggers and the repo settings in turn — all of which
 were fine. Only escalate to repo configuration once the status page is clean.
 
-**The real consequence outlives the outage: `go test -race` has never run
-against the parsers now on `main`.** `2b5f4ed` added 963 lines of Go —
-`internal/parse/htmlsite.go`, `internal/parse/substack.go` and their tests, plus
-smaller changes in `parse.go`, `main.go` and `corpus/starter.go` — and CI has not
-seen any of it. Local `go build`, `go vet`, `gofmt -l` and `go test ./...` are
-clean on all of it, but the race detector needs cgo and does not run on a stock
-Windows box, so CI is the only place it executes. **This is the single most
-important loose end in the repo.**
+**The consequence outlived the outage for three weeks, and is now closed.**
+`2b5f4ed` added 963 lines of Go — `internal/parse/htmlsite.go`,
+`internal/parse/substack.go` and their tests, plus smaller changes in
+`parse.go`, `main.go` and `corpus/starter.go` — and for three weeks CI had seen
+none of it. The race detector needs cgo and does not run on a stock Windows box,
+so CI is the only place it executes.
+
+**Run `33121447668` on 2026-08-27 cleared it**, and by a route worth recording,
+because it was not the manual trigger this file had been telling people to
+reach for. The PR that corrected these very notes touches only `TODO.md` and
+`ci.yml` — **no Go file differs between that branch and `main`** — so the
+`pull_request` run exercised `main`'s parser code exactly as it stands. All five
+steps ran and passed, race detector included, `internal/parse` among them.
+
+Two things fell out of that. The `pull_request` trigger fires again, so the
+outage was the entire cause and nothing in the repo needed changing. And a
+docs-only PR off an untested `main` is a way to get `main`'s code through CI
+without inventing a dummy commit — cheaper than `workflow_dispatch` when a real
+change is waiting to go out anyway.
 
 `ci.yml` previously had **no `workflow_dispatch`**, unlike `build_release.yml`,
 so a missed run left no way to kick CI short of pushing another commit. Added in
@@ -119,22 +130,16 @@ which is exactly the recovery case.
 
 ## Immediate next steps
 
-1. **Run CI by hand on `main` — this is the first thing to do.** The outage is
-   over: GitHub reported Actions `operational` with no unresolved incidents as
-   of 2026-08-06 evening, and it has stayed that way. But **the missed runs
-   never replayed**, so `main` still has 963 lines of Go that CI has never seen
-   and `go test -race` has never covered. `workflow_dispatch` is merged, so:
+1. **Dedupe, as a report** — see below. It now has measurements rather than
+   guesses, and the shape is settled. This is the next real piece of work.
+2. **Show the document ID in human search output** — small, and argued below to
+   matter more than its size.
+3. **Revisit embeddings** when there is something to judge them against, which
+   means an evaluation set only Justin can supply.
 
-   ```
-   gh workflow run ci.yml --ref main
-   gh run list --limit 3
-   ```
-
-   If that produces no run, re-check <https://www.githubstatus.com> before
-   suspecting the repo — that mistake has already been made once here.
-2. **Then dedupe**, as a report — see below. It now has measurements rather than
-   guesses, and the shape is settled.
-3. **Revisit embeddings** when there is something to judge them against.
+The CI item that used to head this list is done — see above. If CI ever goes
+quiet again, check <https://www.githubstatus.com> before suspecting the repo,
+then `gh workflow run ci.yml --ref main`.
 
 Deliberately not next: corpus balance, and any change to how search ranks. See
 the decisions below.
