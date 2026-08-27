@@ -19,6 +19,23 @@ done wrong.
 
 ---
 
+## What this is ultimately for
+
+Justin, 2026-08-06, in his own framing: **a single corpus of all his writing, so
+he can stop worrying about how it is scattered.**
+
+Worth having at the top, because it is the thing individual decisions get judged
+against and it is not derivable from the code. The scattering is the problem;
+searching is the means. A change that makes search cleverer but leaves him still
+tracking which export a piece lives in has not moved toward this.
+
+It also sets a bar for the dedupe pass that is worth stating plainly: a report
+that lists duplicates still leaves him holding the question of which copy is the
+real one. See the note in that section — the settled decision is report-first,
+and whether that is the end state or a stepping stone is genuinely open.
+
+---
+
 ## Where things stand — 2026-08-06
 
 **All five parsers are written**: `text`, `html`, `htmlsite`, `facebook`,
@@ -26,10 +43,23 @@ done wrong.
 unregistered, exercised directly by its test, so the next format named before it
 is written gets "not written yet" rather than a lie about being unrecognised.
 
-**Branch and PR.** [PR #3](https://github.com/CuriousJC/coroner/pull/3) merged
-into `main` at `e7eea6a` on 2026-08-06. PR #2 was closed as superseded and its
-branch deleted. Current working branch is `feature/digest-milestone`, off
-`e7eea6a`.
+**Branch and PR.** `main` is at **`b200e11`**. Two PRs merged on 2026-08-06:
+[#3](https://github.com/CuriousJC/coroner/pull/3) (the five parsers, links,
+stats, TODO.md) and [#4](https://github.com/CuriousJC/coroner/pull/4)
+(`workflow_dispatch` plus the first-digest findings). PR #2 was closed as
+superseded.
+
+**Branch `fix/ci-outage-note`**, off `b200e11`, corrects the CI diagnosis in
+`TODO.md` and `.github/workflows/ci.yml` — the first version of both blamed the
+workflow file and the repo's Actions settings, and the cause turned out to be a
+GitHub outage. Opening that PR is also the cheapest way to find out whether the
+`pull_request` trigger fires again, which the outage left untested.
+
+The three merged branches — `updates-1`, `feature/digest-milestone` and
+`feature/initial-scaffolding` — were deleted locally and on the remote. The last
+of those was never an ancestor of `main`: its tip `31a3d14` was cherry-picked
+onto `updates-1` as `31b6b46`, so the content is on `main` under a different
+hash and the branch was superseded rather than abandoned.
 
 **The corpus is digested.** All three sources, 5,974 documents in 7,977 chunks,
 in 2m32s. Counts came out exactly as predicted:
@@ -50,29 +80,58 @@ before a digest and means re-digesting from scratch afterwards.
 dimensions, what `embed.DefaultModel` names). `digest` has no lexical mode —
 `-mode=lexical` is a `search` flag — so a corpus cannot be built without it.
 
-**CI has not run since `a703daf`, and this is now a pattern rather than a
-hiccup.** Two consecutive triggers were missed: the push of `2b5f4ed` to the PR
-branch, and the push of the merge commit `e7eea6a` to `main`. `ci.yml` fires on
-`pull_request` and on push to `main`, both workflows report `active`, and the
-repo is public, so the obvious explanations do not hold. Local `go build`,
-`go vet`, `gofmt -l` and `go test ./...` are clean, but **`go test -race` has
-never run against the code now sitting on `main`** — it needs cgo and does not
-run on a stock Windows box, so CI is the only place it executes.
+**CI stopped triggering on 2026-08-06, and the cause was a GitHub Actions
+outage.** Not the workflow file, and not this repo's configuration. Three pushes
+in a row produced no run at all: `2b5f4ed` to a PR branch at 18:21Z, the merge
+commit `e7eea6a` to `main` at 18:46Z, and `06f10da` to a fresh branch with a
+fresh PR at 19:40Z. GitHub's status page showed **Actions in `major_outage`,
+incident opened 15:22:49Z**, and every miss falls inside that window while the
+last green run — `a703daf` at 14:02Z — falls before it. The repo was checked and
+is healthy: `actions/permissions` reports `enabled: true` and
+`allowed_actions: all`, and both workflows report `state: active`.
+
+**The outage is over** — GitHub reported Actions `operational` with no
+unresolved incidents later the same evening. **The missed runs did not replay.**
+Nothing was queued and flushed; those three triggers are simply gone, which is
+why `workflow_dispatch` earns its place and why step 1 below is still open.
+
+**Check <https://www.githubstatus.com> first when CI does not fire.** It is the
+cheapest diagnostic there is, and skipping it cost an afternoon of suspecting
+the workflow file, the triggers and the repo settings in turn — all of which
+were fine. Only escalate to repo configuration once the status page is clean.
+
+**The real consequence outlives the outage: `go test -race` has never run
+against the parsers now on `main`.** `2b5f4ed` added 963 lines of Go —
+`internal/parse/htmlsite.go`, `internal/parse/substack.go` and their tests, plus
+smaller changes in `parse.go`, `main.go` and `corpus/starter.go` — and CI has not
+seen any of it. Local `go build`, `go vet`, `gofmt -l` and `go test ./...` are
+clean on all of it, but the race detector needs cgo and does not run on a stock
+Windows box, so CI is the only place it executes. **This is the single most
+important loose end in the repo.**
 
 `ci.yml` previously had **no `workflow_dispatch`**, unlike `build_release.yml`,
-so a missed trigger left no way to kick a run short of pushing another commit.
-Added on this branch. It does not fix the trigger problem — it makes the problem
-recoverable, which is the most that can be done from inside the repo.
+so a missed run left no way to kick CI short of pushing another commit. Added in
+`06f10da`. The outage explains why the runs went missing; `workflow_dispatch` is
+what lets the skipped checks be run afterwards without inventing a dummy commit,
+which is exactly the recovery case.
 
 ---
 
 ## Immediate next steps
 
-1. **Merge this branch and run CI by hand** from the Actions tab, now that
-   `workflow_dispatch` exists. Confirm `-race` goes green against `main`. Until
-   that happens nobody knows whether `main` is sound. If the manual run also
-   fails to appear, the problem is with the repo's Actions configuration rather
-   than the workflow file, and that is the next thing to look at.
+1. **Run CI by hand on `main` — this is the first thing to do.** The outage is
+   over: GitHub reported Actions `operational` with no unresolved incidents as
+   of 2026-08-06 evening, and it has stayed that way. But **the missed runs
+   never replayed**, so `main` still has 963 lines of Go that CI has never seen
+   and `go test -race` has never covered. `workflow_dispatch` is merged, so:
+
+   ```
+   gh workflow run ci.yml --ref main
+   gh run list --limit 3
+   ```
+
+   If that produces no run, re-check <https://www.githubstatus.com> before
+   suspecting the repo — that mistake has already been made once here.
 2. **Then dedupe**, as a report — see below. It now has measurements rather than
    guesses, and the shape is settled.
 3. **Revisit embeddings** when there is something to judge them against.
@@ -127,6 +186,29 @@ milestone: hand-copying means `ContentHash` will not match.** That was the
 prediction. It is now measured against the real digested corpus, and it was
 right by a wide margin:
 
+**It is a three-way problem, not a two-way one.** The first measurement only
+compared `html_posts` against `facebook_posts`, which was too narrow — a search
+for "electoral college" returned the same piece from `html_posts` and
+`substack_posts` on the same date, which the Facebook-only comparison could not
+have seen. All three pairs, ≥0.5 Jaccard within ±3 days:
+
+| from | against | overlapping | share |
+| --- | --- | --- | --- |
+| `html_posts` (189) | `facebook_posts` | 175 | 93% |
+| `substack_posts` (134) | `facebook_posts` | 25 | 19% |
+| `substack_posts` (134) | `html_posts` | 24 | 18% |
+
+Read that as: the HTML site is almost entirely a curated copy of Facebook, while
+Substack is mostly new writing that revisits older material about a fifth of the
+time. This is why the precedence order needs all three tiers rather than just
+the two the original framing implied — a Substack post can displace an HTML post
+that is itself displacing a Facebook post, and the pass has to resolve the chain
+rather than a pair.
+
+The detailed measurements below are the `html_posts` → `facebook_posts` pair,
+which was measured first and most closely. The other two pairs have not been
+broken down the same way, and should be before the pass is written.
+
 - **171 of the 189 `html_posts` share a date with at least one Facebook post**
   (176 distinct dates in `html_posts`, 171 of them present in `facebook_posts`).
   So the overlap is close to total, as expected from posts copied out of
@@ -161,6 +243,14 @@ Remaining open questions:
   ever prints is one you can be wrong about harmlessly. The precedence order
   still matters: it decides which member of a group the report names as the
   winner.
+
+  **Flagged, not reopened:** this sits awkwardly against the stated goal at the
+  top of this file. A report tells Justin where the duplicates are; it does not
+  give him the single corpus that would let him stop tracking which export a
+  piece lives in. Both can be true — report first, act later, once the groups
+  have been read and trusted — and report-first is the right first step either
+  way. But if the report is ever treated as the finished feature, the goal has
+  not been met. Decide deliberately rather than by drift.
 - **Where does precedence live?** Still open. A `priority` field in `corpus.yaml`
   is the natural home: it generalises without hardcoding three corpus names, and
   keeps the rule beside the data it describes. Less urgent now that the pass only
@@ -197,6 +287,22 @@ none of them.
 If it does turn out to need addressing, a `-source` filter on `search` — the way
 `stats -source` already works — is the option that involves no ranking judgement
 at all, and so the one to reach for first.
+
+### Search: show the document ID in human output
+
+`search -format=json` carries `id` on every result; the human-readable output
+does not. So a document can be found and read but not cited without re-running
+the query as JSON, which makes the 16-character ID much less useful than it was
+meant to be — it is short and greppable precisely so it can be written down.
+
+Small change, and it matters more than its size given the goal at the top of
+this file: referring to a piece of writing by one stable handle, rather than by
+which export it happens to live in, is most of what "a single corpus" means in
+practice.
+
+Worth deciding whether it always shows or hides behind `-verbose`. Always is
+probably right — the ID is 16 characters on a line that already carries a corpus
+name, a date and a score.
 
 ### Search: filter by date range
 

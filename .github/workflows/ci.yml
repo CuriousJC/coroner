@@ -4,11 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Lets a run be started by hand. This is here because the automatic triggers
-  # have silently failed to fire twice — once on a push to a PR branch, once on
-  # the merge commit to main — and without this there is no way to kick CI
-  # short of pushing another commit. The race detector only ever runs here, so
-  # a missed trigger means nobody knows whether main is sound.
+  # Lets a run be started by hand. Added after a GitHub Actions outage on
+  # 2026-08-06 swallowed three pushes in a row, leaving commits on main that CI
+  # had never seen and no way to run the missed checks short of inventing a
+  # dummy commit. The race detector only ever runs here, because it needs cgo
+  # and will not run on a stock Windows box, so checks that get skipped stay
+  # skipped until something reruns them.
   workflow_dispatch:
 
 jobs:
