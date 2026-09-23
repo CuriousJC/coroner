@@ -10,6 +10,9 @@ main executable for coroner
 	coroner sources
 	coroner stats -sample=10
 	coroner links -source=source/facebook_posts
+	coroner dupes
+	coroner export
+	coroner serve
 
 // For creating an executable:::
 
@@ -17,20 +20,20 @@ main executable for coroner
 	make all
 
 //Stuff todo:::
-Planned work lives in TODO.md at the repo root, not here. It was moved out
-because a roadmap in a header comment cannot carry the reasoning behind an item,
-and an item without its reasoning gets done wrong. In brief: the substack parser
-(now unblocked), a third HTML export awaiting bytes, cross-corpus dedupe, and two
-search refinements.
+Planned work lives in TODO.md at the repo root.
 */
 package main
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -47,9 +50,12 @@ import (
 	"github.com/curiousjc/coroner/internal/links"
 	"github.com/curiousjc/coroner/internal/parse"
 	"github.com/curiousjc/coroner/internal/search"
+	"github.com/curiousjc/coroner/internal/serve"
 	"github.com/curiousjc/coroner/internal/stats"
 	"github.com/curiousjc/coroner/internal/store"
+	"github.com/curiousjc/coroner/internal/timeline"
 	"github.com/curiousjc/coroner/internal/version"
+	"github.com/curiousjc/coroner/internal/webui"
 )
 
 var buildContext = "development"
@@ -101,6 +107,10 @@ func main() {
 		run(cmdStats(args))
 	case "dupes":
 		run(cmdDupes(args))
+	case "export":
+		run(cmdExport(args))
+	case "serve":
+		run(cmdServe(args))
 	case "initsource":
 		run(cmdInitSource(args))
 	case "initconfig":
@@ -112,7 +122,7 @@ func main() {
 	default:
 		corlog.Heading(true, "coroner %s", version.Version)
 		corlog.Error(true, "Unknown command %q.", cmd)
-		corlog.Detail(true, "Commands: digest, search, sources, stats, dupes, links, initsource, initconfig, version, examples")
+		corlog.Detail(true, "Commands: digest, search, sources, stats, dupes, export, serve, links, initsource, initconfig, version, examples")
 		corlog.Detail(true, "Try `coroner examples` for worked usage.")
 		os.Exit(1)
 	}
@@ -1205,6 +1215,143 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------- export and serve
+
+// loadTimeline reads every digested corpus into one date-ordered list.
+func loadTimeline(digested string) (timeline.Timeline, error) {
+	st, err := store.Open(digested)
+	if err != nil {
+		return timeline.Timeline{}, err
+	}
+	corpora, err := st.ReadAll()
+	if err != nil {
+		return timeline.Timeline{}, err
+	}
+	if len(corpora) == 0 {
+		return timeline.Timeline{}, fmt.Errorf("nothing has been digested into %s yet.\n    coroner digest", digested)
+	}
+	man, err := st.LoadManifest()
+	if err != nil {
+		return timeline.Timeline{}, err
+	}
+	return timeline.Build(corpora, man), nil
+}
+
+func cmdExport(args []string) error {
+	c := newFlagSet("export")
+	format := c.fs.String("format", "html", "Output format: html or json.")
+	out := c.fs.String("out", "", "Where to write. Default: writing.html or writing.json in the digested directory. Use - for standard output.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+	if *format != "html" && *format != "json" {
+		return fmt.Errorf("unknown format %q; use html or json", *format)
+	}
+
+	// The default lands in the digested directory because the file is the whole
+	// corpus, and that directory is the one git already ignores.
+	if *out == "" {
+		*out = filepath.Join(*c.digested, "writing."+*format)
+	}
+
+	tl, err := loadTimeline(*c.digested)
+	if err != nil {
+		return err
+	}
+
+	write := tl.HTML
+	if *format == "json" {
+		write = tl.JSON
+	}
+
+	if *out == "-" {
+		return write(os.Stdout)
+	}
+
+	f, err := os.Create(*out)
+	if err != nil {
+		return err
+	}
+	if err := write(f); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	corlog.Heading(true, "coroner %s", version.Version)
+	corlog.Info(true, "")
+	corlog.Success(true, "Wrote %s to %s", plural(len(tl.Entries), "piece of writing", "pieces of writing"), filepath.ToSlash(*out))
+	if tl.Folded > 0 {
+		corlog.Detail(true, "  %s more are copies of writing listed once, under its best copy", comma(tl.Folded))
+	}
+	if n := len(tl.Undated()); n > 0 {
+		corlog.Detail(true, "  %s undated", comma(n))
+	}
+	corlog.Detail(true, "  this file is the whole corpus: keep it out of anything that syncs or publishes")
+	return nil
+}
+
+func cmdServe(args []string) error {
+	c := newFlagSet("serve")
+	addr := c.fs.String("addr", serve.DefaultAddr, "Where to listen. Loopback only.")
+
+	if _, _, err := c.load(args); err != nil {
+		return err
+	}
+	if err := serve.CheckLoopback(*addr); err != nil {
+		return err
+	}
+
+	tl, err := loadTimeline(*c.digested)
+	if err != nil {
+		return err
+	}
+
+	ui, built := webui.Assets()
+
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+
+	h, err := serve.Handler(tl, ui, ln.Addr())
+	if err != nil {
+		ln.Close()
+		return err
+	}
+
+	corlog.Heading(true, "coroner %s", version.Version)
+	corlog.Info(true, "")
+	corlog.Field(true, "Serving", fmt.Sprintf("%s pieces of writing", comma(len(tl.Entries))))
+	if built {
+		corlog.Field(true, "Viewer", "the built-in front end")
+	} else {
+		corlog.Field(true, "Viewer", "the static timeline (this binary was built without the front end; `make all` builds it in)")
+	}
+	corlog.Info(true, "")
+	corlog.Success(true, "Open http://%s/", ln.Addr())
+	corlog.Detail(true, "  Ctrl-C to stop")
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(shutdown)
+	}()
+
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------- init

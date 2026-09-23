@@ -26,3 +26,9 @@
 
 # Output of the go coverage tool
 *.out
+
+# The front end's dependencies, and its build, which `make all` regenerates and
+# embeds into the binary. The build is code only; the writing it shows is
+# fetched from `coroner serve` at runtime.
+/web/node_modules/
+/internal/webui/dist/

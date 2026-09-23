@@ -2,197 +2,165 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Keep the repo present-day
+
+Docs and comments describe the system as it is now. No history, no "measured on" or "decided on" narratives, no tombstones for things that were removed or changed, no records of past incidents. Git history and PRs already hold all of that. When a rule needs a reason, give the reason briefly and in the present tense.
+
+`TODO.md` lists only work that has not been done. Remove an item when it is done; do not move it to a "done" list.
+
 ## What this is
 
-`coroner` is a single-binary CLI that digests bodies of personal writing into a searchable corpus, then searches that corpus by concept rather than by keyword. Two verbs: `digest` reads exports into a shared digested directory, `search` queries across everything digested.
+`coroner` is a single-binary CLI that digests bodies of personal writing into a searchable corpus, then searches it by concept rather than by keyword. `digest` reads exports into a shared digested directory; `search`, `dupes`, `stats`, `export` and `serve` read from it.
 
-Four direct dependencies: `gopkg.in/yaml.v3` (config and manifests), `github.com/fatih/color` (console output), `golang.org/x/net/html` (HTML extraction), `golang.org/x/text` (Unicode normalisation).
+Go dependencies: `gopkg.in/yaml.v3` (config and manifests), `github.com/fatih/color` (console output), `golang.org/x/net/html` (HTML extraction), `golang.org/x/text` (Unicode normalisation). The front end in `web/` is React and Vite, built with node.
 
-It is the sibling of `hecato` and follows its patterns deliberately. Where it departs, the departure is noted below.
+It is the sibling of `hecato` and follows its patterns.
 
 ## Commands
 
 ```bash
-go build -o coroner.exe cmd/coroner/main.go   # quick local build, no version injection
-make all                                       # cross-compile linux + windows, dev logging
-make release                                   # same, but BUILD_CONTEXT=release (what CI runs)
+go build -o coroner.exe cmd/coroner/main.go   # quick local build: no version injection, no front end
+make all                                       # front end + cross-compile linux and windows, dev logging
+make release                                   # same, BUILD_CONTEXT=release (what CI runs)
+make web                                       # just the front end, into internal/webui/dist
 make test
 make vet
 
-coroner initsource -source=source/substack -type=substack
+coroner initsource -source=source/goodreads -type=goodreads
 coroner digest
 coroner search "choice"
 coroner search "branching logic" -hits=25 -format=json
 coroner sources
-coroner stats
 coroner stats -sample=10
-coroner links
+coroner links -source=source/facebook_posts
 coroner dupes
-coroner dupes -format=json -threshold=0.8
+coroner export                  # digested/writing.html
+coroner export -format=json     # digested/writing.json
+coroner serve                   # http://127.0.0.1:8484
 ```
 
-A single test: `go test ./internal/doc -run TestSplitIsDeterministic -v`.
+A single test: `go test ./internal/doc -run TestSplitIsDeterministic -v`. Front-end dev: `coroner serve` in one terminal, `npm run dev` in `web/` in another (Vite proxies `/api` to serve).
 
-Every package has tests except `internal/examples`, `internal/version` and `internal/embed`. `embed` is untested because everything in it is an HTTP conversation with ollama; the code that depends on it is tested through the `digest.Embedder` interface instead.
+Every Go package has tests except `internal/examples`, `internal/version`, `internal/embed` and `internal/webui`. `embed` is an HTTP conversation with ollama, tested through the `digest.Embedder` interface instead.
 
-## The determinism contract
+## Determinism
 
-This is the constraint the whole design serves, and the reason to be careful before changing anything in `internal/doc` or `internal/store`.
+Given the same source bytes, coroner version and embedding model, digesting twice produces byte-identical `.docs.jsonl`, `.chunks.jsonl` and `.vec` files (`TestDigestIsReproducible`). `export` output is likewise a function of the digested directory alone. The one wall-clock fact is `digested_at` in `digested/manifest.yaml`.
 
-**Guaranteed:** given the same source bytes, the same coroner version and the same embedding model, digesting twice produces byte-identical `.docs.jsonl`, `.chunks.jsonl` and `.vec` files. `TestDigestIsReproducible` asserts this by digesting the same tree twice at different worker counts and comparing bytes.
+Embeddings are not guaranteed identical across an ollama upgrade or model re-pull, so the manifest records the model, its digest and the vector width, and `Manifest.CheckEmbed` is a hard error: mixed vector spaces return a confident ranking that is meaningless.
 
-**Not guaranteed:** embeddings across an ollama upgrade or a model re-pull. A forward pass is not sampling, so it is stable in practice on one machine, but nothing promises bit-identical floats across versions. This is why `digested/manifest.yaml` records the model name, ollama's digest for it, and the vector width — and why `Manifest.CheckEmbed` is a hard error rather than a warning. Mixed vector spaces do not crash; they return a confident ranked list that is meaningless for half the corpus.
+Four things break determinism if you are not deliberate:
 
-**Deliberately not reproducible:** `digested/manifest.yaml` carries `digested_at`. Keeping the one wall-clock fact in one file is what lets you diff two digested directories and see only what actually changed.
+- **Map iteration.** Anything accumulated in a map and then serialised, ranked or summed is sorted first (`ruleSet.all()`, `fuse()`, `buildBM25`, `SaveManifest`, `timeline.Build`).
+- **Concurrency.** `parseAll` writes into per-file slots and merges in file order; `store.Write` sorts documents and chunks itself.
+- **Float summation order.** BM25 iterates sorted unique query terms over index-ordered postings; `embed.BatchSize` is a constant so batches depend on the corpus, not on leftover work.
+- **Unicode.** `doc.Normalise` composes to NFC before anything is hashed.
 
-Four things break determinism if you are not deliberate, and all four have been hit at least once here:
+## Privacy
 
-- **Go randomises map iteration.** Anything accumulated in a map and then serialised, ranked or summed must be sorted first. See `ruleSet.all()`, `fuse()`, `buildBM25`'s per-chunk term sort, and `SaveManifest`.
-- **Concurrency reorders results.** `parseAll` writes into per-file slots and merges in file order; `store.Write` sorts documents and chunks itself rather than trusting the caller.
-- **Float summation order.** BM25 iterates sorted unique query terms over index-ordered posting lists. `embed.BatchSize` is a constant rather than something derived from the job size, so batches are a function of the corpus and not of how much work happened to be left.
-- **Unicode.** `doc.Normalise` composes to NFC before anything is hashed. Without it the same essay exported by two tools is two documents.
+The methods are public; the writing is not.
+
+- `source/` and `digested/` are gitignored and stay that way. Nothing resolves against a path baked in for one machine.
+- `coroner export` writes into the digested directory by default, because the file is the whole corpus.
+- The exported HTML page loads nothing: no script, font or remote asset.
+- `coroner serve` listens on loopback only (`serve.CheckLoopback`, no override flag). It answers only requests whose `Host` is a loopback name on its own port, which stops DNS rebinding. It sends no CORS headers, and its CSP keeps the front end to its own origin.
+- The front-end bundle is code only; the writing is fetched from `serve` at runtime, so building, embedding or releasing the binary never carries corpus text.
+- Substack's `Include()` is a narrow allowlist (`posts/*.html`) because the export keeps per-subscriber analytics with email addresses beside the posts.
 
 ## Architecture
 
-Digest and search are two pipelines that meet at the digested directory.
-
 **Digest:** `cmd/coroner` → `internal/digest` → `internal/corpus` (manifest) → `internal/parse` (per-format parser) → `internal/doc` (normalise, hash, chunk) → `internal/embed` (ollama) → `internal/store` (JSONL + vectors).
 
-**Search:** `cmd/coroner` → `internal/store` (load all) → `internal/search` (BM25 + vectors + RRF) → results.
+**Search:** `cmd/coroner` → `internal/store` (load all) → `internal/search` (BM25 + vectors + RRF).
 
-**Links:** `internal/links` renders the outbound links an export recorded, via the optional `parse.LinkLister` interface. Only `facebook` implements it.
+**Read-only passes over `digested/`**, none needing ollama:
 
-Links are deliberately **not documents**. A URL tokenises into fragments that mean nothing to a reader and everything to a lexical index — `https`, `www`, `com`, a hex tracking parameter — and there are thousands of them, so indexing them would degrade every search in order to make one kind of lookup work. What makes the artefact worth reading is not the URLs but the commentary written alongside them.
+- `internal/dupes`: the same writing across corpora, and which copy wins.
+- `internal/timeline`: every piece of writing in one date-ordered list, duplicates folded into their winning copy. Rendered as JSON or a self-contained HTML page by `coroner export`, and served by `internal/serve` for `coroner serve`.
+- `internal/stats`: counts, date histogram, length spreads, vocabulary.
 
-`coroner links` runs through `digest.ParseOnly`, which shares the walk and worker pool with `Run` but discards the documents and embeds nothing — so it works with ollama absent. Sharing that path is deliberate: a second route through the same export could drift out of step with the first.
+`internal/ignore` decides what the digest walk never sees: the built-in `Noise` list (version control, media, web scaffolding) plus a manifest's `exclude` globs.
 
-Two measured details: the export repeats one `external_context` across a record's attachments, which accounted for 317 of 2,848 entries, so the same URL at the same second is deduplicated — but the same URL at a *different* time is a genuine re-share and is kept, because when you shared something again is what you would be reading the file to find out. And `t.co` is a third of all links: Twitter cross-posts, opaque and mostly dead, but they carry commentary so they are not dropped.
+`internal/links` renders outbound links an export recorded, via the optional `parse.LinkLister` (Facebook only). It runs through `digest.ParseOnly`, sharing the walk with `Run`, so it needs no ollama.
 
-**Dupes:** `internal/dupes` finds the same piece of writing recorded in more than
-one corpus and names which copy wins. It reads `digested/` only — no ollama, no
-writes — so it cannot corrupt anything, and `coroner dupes -format=json` is what
-a future viewer would read.
+### CLI
 
-The measured facts it is built on, all against the real 5,974-document corpus:
+Each subcommand builds its own `flag.FlagSet`; `commonFlags` holds what they share. `commonFlags.reorder` moves flags ahead of positionals, because Go's `flag` stops at the first positional and `coroner search "choice" -hits=25` would otherwise search for `choice -hits=25`. It asks the FlagSet whether a flag takes a value and re-emits `--`.
 
-- **`ContentHash` is useless here.** The HTML posts were copied out of Facebook
-  by hand, so hash equality finds 3 of ~175 real duplicates in that pair and 0
-  of the 49 across the two Substack pairs. Date proximity plus 5-word-shingle
-  Jaccard is what separates them.
-- **The thresholds are constants because the data has an empty middle.** Across
-  all three corpus pairs, *no* document scores between 0.2 and 0.5 against its
-  best match, so anything in 0.5–0.8 draws the same line and there is nothing to
-  tune. A ±2 and a ±3 day window give identical results; ±2 is cheaper.
-- **Quote folding is required, and only at comparison time.** Substack is 81%
-  typographic apostrophes, the HTML site 99% straight. Since `'` is a word
-  character to the tokeniser, every contraction breaks a shingle. Folding does
-  not change *which* documents are detected but lifts 14 Substack matches from
-  0.5–0.8 into ≥0.8. It must never move upstream of a document ID — the corpora
-  legitimately differ, and rewriting stored text would renumber every Substack
-  document to fix a reporting nicety.
-- **Groups, not pairs.** 23 of the 26 overlapping Substack documents are
-  three-way chains — Substack displacing HTML displacing Facebook — so matches
-  are unioned into groups. Resolving pairs independently would report the same
-  writing two or three times.
-- **Only cross-corpus pairs are compared.** Duplicates within one corpus are
-  dropped at digest time; two similar posts in the same corpus are the author
-  repeating himself, which is writing.
-
-Precedence comes from `priority` in each `corpus.yaml`, higher winning, copied
-into the digested manifest at digest time so the pass stays digested-only. Unset
-is 0, which loses to anything ranked. Ties break on corpus name then document ID
-— arbitrary but fixed, which is honest where "longest wins" would look like a
-judgement nobody made. **The pass only reports**: search behaviour is unchanged,
-nothing is filtered or suppressed.
-
-**Stats:** `internal/stats` describes a digested corpus — counts, date histogram, length spreads, vocabulary. It exists because a corpus is not something you can eyeball: five thousand documents you cannot read are indistinguishable from five thousand that parsed badly, and parser failures are quiet. Text truncated at the first newline shows up as a suspiciously tight word-count spread; a dropped year shows up as a gap in the histogram; boilerplate shows up as a low hapax share. `coroner stats -sample=N` prints documents spread evenly through the corpus rather than from the front, since documents are sorted by a hash and the first few are a fixed arbitrary slice that would hide a parser failing on later records.
-
-### Subcommands, not `-method`
-
-The one substantial departure from hecato. Hecato's `-method` switch works because every method takes the same flags; `digest` and `search` genuinely do not. Each subcommand builds its own `flag.FlagSet`, and `commonFlags` holds what they share.
-
-`commonFlags.reorder` exists because Go's `flag` package stops parsing at the first non-flag argument, so `coroner search "choice" -hits=25` would parse as a query of `choice -hits=25` with the flag silently ignored. It moves flags ahead of positionals, asking the FlagSet whether each flag consumes the next argument rather than guessing, and re-emits `--` so a query starting with a dash survives. This was a live bug, not a hypothetical.
-
-Flag precedence is **explicit flag > config > built-in default**, implemented with `fs.Visit` exactly as hecato does it — `Visit` walks only flags actually typed, which is the only way to tell `-hits=10` from the identical default.
+Flag precedence is explicit flag > config > built-in default, via `fs.Visit`, which walks only flags actually typed.
 
 ### Sources and manifests
 
-A source directory holds one export plus a `corpus.yaml` saying what it is. Coroner never sniffs formats: the guess would depend on which file the walk reached first, and a digest that depends on walk order is not reproducible.
+A source directory holds one export plus a `corpus.yaml` naming its type. Coroner never sniffs formats, because a guess would depend on walk order.
 
-`Manifest.Name` is load-bearing. It is part of every document ID and it names the files that corpus writes into the digested directory, so `validName` restricts it to `[a-z0-9_-]{1,64}` — restricting rather than escaping, because a name containing a separator would let a manifest write outside its own corpus.
+`Manifest.Name` is part of every document ID and names the corpus's files in `digested/`, so `validName` restricts it to `[a-z0-9_-]{1,64}`. Every corpus takes its directory name.
 
-`corpus.example.yaml` and `coroner.example.yaml` at the repo root are committed copies of what `initsource` and `initconfig` write. `TestExampleConfigMatchesGenerator` and `TestExampleManifestMatchesGenerator` are the only things keeping them in sync — change a starter and regenerate the example or those tests fail.
+`priority` in `corpus.yaml` ranks corpora for `dupes` and `timeline`, higher winning, and is copied into the digested manifest at digest time. Because `source/` is gitignored, priorities are local: `substack_posts: 30`, `goodreads: 25`, `html_posts: 20`, `facebook_posts: 10`.
 
-### The parser pattern
+`corpus.example.yaml` and `coroner.example.yaml` are committed copies of what `initsource` and `initconfig` write, kept in sync by `TestExampleManifestMatchesGenerator` and `TestExampleConfigMatchesGenerator`. Change a starter, regenerate the example.
 
-`parse.Parser` is two phases: `Prepare` runs once and is where a format reads its sidecar metadata (Substack's `posts.csv`); `ParseFile` is called concurrently and must be read-only afterwards. Adding a format means a new file in `internal/parse`, an entry in `constructors`, and a line in the manifest starter's type list.
+### Parsers
 
-`text`, `html`, `htmlsite`, `facebook` and `substack` are all implemented. Nothing is pending.
+`parse.Parser` is two phases: `Prepare` runs once and reads sidecar metadata; `ParseFile` is called concurrently and must be read-only. Adding a format means a file in `internal/parse`, an entry in `constructors`, and a line in the manifest starter's type list.
 
-`pendingParser` stays anyway, exercised by a test that constructs it directly. It is what a format named in a manifest before its parser exists should get: a clear "not written yet" rather than being told the type is unknown. Every format here has been written against a real export rather than a documented shape, and that order is not negotiable — a parser written from documentation is confidently wrong about encoding, and encoding errors quietly corrupt every document ID in a corpus. Facebook proved it, arriving double-encoded in a way nothing documented would have predicted.
+Formats: `text`, `html`, `htmlsite`, `facebook`, `substack`, `goodreads`. A parser is only ever written against a real export on disk, never a documented shape: encoding mistakes corrupt document IDs silently. A format named before its export exists gets `pendingParser`, which fails with "not written yet".
 
-`parse.RecordCounter` is an optional interface for parsers whose files hold many records. Only `facebook` implements it. It exists because "1 file parsed, 5,651 documents" gives no way to tell a photo-heavy export from a parser that has silently started dropping things.
+`parse.RecordCounter` is optional, for files holding many records, so a digest can say how much produced no text. Only `facebook` implements it.
 
-### What the Facebook export actually looks like
+`doc.Indexed` prepends the title to every chunk for both retrievers, so **a title must be distinct per document**. A title repeated across a corpus (boilerplate) flattens every vector. Several format rules below exist because of this.
 
-Written against a real 8,195-record export, and these numbers are why the parser does what it does. Do not "simplify" any of them without re-measuring.
+**facebook** (`your_posts*.json`)
+- The export's `title` field is boilerplate ("… updated his status."), so documents have no title.
+- No post identifier exists; identity is `timestamp` plus a hash of the text.
+- Photo captions are appended, deduplicated against the post text because Facebook often copies the caption into both.
+- The export is double-encoded (UTF-8 read as latin-1). `repairMojibake` undoes it before `doc.New`, and refuses unless the result is valid UTF-8 containing a multi-byte character, so genuine latin-1 and ASCII pass through.
+- Other JSON files in the export hold no post text or duplicate edit history, and are not read.
 
-- **The `title` field is chrome**, not a title: "Justin Crosby updated his status." repeated across thousands of records. Documents are given **no title at all**. Since `doc.Indexed` prepends the title to every chunk before embedding, using it would inject identical boilerplate into every vector in the corpus and flatten exactly the distinctions search exists to find. `TestFacebookLeavesTitleEmpty` guards this.
-- **There is no post identifier anywhere.** Identity is built from `timestamp` plus a hash of the text. Measured: timestamps alone collide 327 times (batch uploads share a second), text alone collides 31 times (people repeat themselves), the two together collide twice — and those two are genuinely the same post recorded twice, which `dedupeIDs` drops and reports.
-- **Photo captions are real writing.** 1,148 media descriptions, all hand-written, none of them Facebook's generated alt text. But 905 of those were byte-identical to the post they hung under, because Facebook copies a caption into both places, so they are deduplicated before being appended. Skipping captions entirely would lose documents; appending blind would double term frequencies inside them.
-- **The export is double-encoded**: UTF-8 bytes re-read as latin-1, so `don't` arrives as `donâ€™t` and an emoji as four accented letters. `repairMojibake` undoes it, and runs *before* `doc.New` because every document ID derives from the text. Measured on the real export: 1,200 strings repaired, 5,595 untouched, zero mojibake markers surviving. Its guards matter more than its transformation — it refuses unless the result is valid UTF-8, the input had a byte above ASCII, and the result contains a multi-byte character, so genuine latin-1 text and plain ASCII pass through unharmed.
-- **Only the posts files are read.** `your_posts*.json`, globbed because a large export splits into `_1`, `_2`. `posts_on_other_pages_and_profiles.json` looks promising and holds no post text at all; `edits_you_made_to_posts.json` is edit history that would duplicate everything.
-- **31% of records hold no text.** Photos and bare link shares. That is normal, and the reason the quiet-corpus warning threshold is 80% rather than something that would fire here.
+**htmlsite** (a hand-built site, one page per post)
+- Separate from `html` because `<title>` is the same site banner on every page. The title is the `<h1>`; the first `<h2>` is a date line. Both are removed from the text. An `<h2>` that does not parse as a date is kept as writing.
+- The filename date is used, never the `<h2>`, which is often stale from a template.
+- `<h1>title</h1>` or no `<h1>` falls back to the filename slug. A ` copy` suffix is dropped from slugs.
+- Pages without `<p>` tags are hand-wrapped; `unwrap` joins wrapped lines and keeps blank lines as paragraph breaks.
 
-### What the hand-built HTML site actually looks like
+**substack** (`posts.csv` plus `posts/*.html`)
+- Titles, subtitles and dates come from `posts.csv` in `Prepare`; the HTML is body only. `post_id` is the native key.
+- The subtitle goes at the head of the text, not the title (a summary repeated on every chunk flattens vectors).
+- Unpublished drafts (`is_published: false`) are skipped.
 
-`htmlsite` reads a site written and maintained by hand, one page per post. Measured against a real 189-page export spanning 2016–2026.
-
-It is a separate format from `html` rather than a configuration of it, and the reason is the title. The generic parser falls back to `<title>`, and **188 of the 189 pages carry the identical site banner there**. Since `doc.Indexed` prepends the title to every chunk before embedding, taking it would put the same string into every vector in the corpus — the same flattening the Facebook `title` field caused, arriving by a different route. The real title is the `<h1>`.
-
-- **The `<h1>` is the title and the first `<h2>` is the date line.** Exactly one of each on 186 pages, none on the other three, and no page uses either as a subheading further down. That is what makes removing both from the body text safe; on a site where `<h2>` were a real subheading it would be destroying writing. An `<h2>` that does not parse as a date is left alone, because then it *is* writing.
-- **The filename date wins unconditionally.** Both sources were cross-checked across the whole export: they agree on 169 pages and disagree on 14, and the `<h2>` is wrong every time. Five carry the date of the very first post, whose page was used as a template; one is a year typo'd a decade out; the rest are off by a day or two. All 189 filenames carry a date where six pages have no `<h2>` at all. A wrong date is worse than no date, because it silently reorders everything sorted by recency.
-- **Five pages have the literal `<h1>title</h1>`**, never filled in after being copied from a template. Those and the three with no `<h1>` fall back to the filename slug, minus its date prefix.
-- **Six filenames end in ` copy`, and none has a surviving twin.** They are ordinary posts whose filename records an editing accident, not duplicates — the suffix is dropped from a slug title but the pages stay.
-- **Twenty-three pages have no `<p>` tags**: the writing sits directly in the container div, hand-wrapped. HTML treats those newlines as ordinary whitespace, but `doc.Normalise` deliberately preserves newlines because for most formats they are authored structure, so the markup's wrapping would become hard breaks mid-sentence and hand the chunker false boundaries. `unwrap` collapses them. Blank lines are kept, which a browser would not do: in about half those pages a blank line is the author's only record of where a paragraph falls.
-- **Encoding is clean** — all 189 valid UTF-8, zero mojibake. No repair step, unlike Facebook.
-
-### What the Substack export actually looks like
-
-`substack` reads `posts.csv` beside a `posts/` directory of HTML bodies. Measured against a real 139-post export. This is the format the two-phase parser interface was designed around: the HTML holds only the body — no title, no date, no `<h1>` — and everything else is in the sidecar, so `Prepare` has to read it first.
-
-- **`Include()` is a narrow allowlist, `posts/*.html`, and must stay one.** `posts/` also holds **218 `.delivers.csv` and `.opens.csv` files** — per-subscriber email analytics carrying subscriber addresses — with another subscriber list at the export root. Naming what to read rather than what to skip means a future export adding an analytics file cannot quietly start indexing addresses. This is a privacy constraint, not a tidiness one.
-- **`post_id` is a genuine native key**, and the filename is exactly `<post_id>.html`. Checked: 139 rows, 139 files, no row without a file and no file without a row. Unlike Facebook, where identity had to be synthesised from a timestamp and a text hash, an edit to a post's text leaves its ID stable.
-- **The subtitle is kept, in the text rather than the title.** 117 of 139 posts have one, they are distinct per post, and only one already appears in its own body — so it is writing that exists nowhere else. It is not folded into `Title`, because `doc.Indexed` repeats the title across every chunk and a summary sentence repeated through a long post is the Facebook `title` shape again.
-- **Unpublished drafts are skipped**, leaving 134 documents from 139 files. The five drafts are exactly the five posts with no title and no date — two read as finished essays, three are scaffolding full of placeholder markers, and nothing but reading them separates the two. `is_published` is taken at its word rather than second-guessed: it is the author's own record of what counts as finished, and a heuristic keyed on placeholder text would be fragile in exactly the way this codebase avoids. With drafts gone, every remaining document has both a title and a date.
-- **Widget chrome is stripped by the existing `skipped` set** — 374 `<button>` and 374 `<svg>` across the export. Nothing else recurs: the only lines appearing in more than a fifth of posts are "Squirt Says…" and "Dad Responds…", which are the author's own recurring column headings, not injected boilerplate.
-- **Captions are kept whole.** 94 `<figcaption>` elements, only 2 repeating body text — the opposite of Facebook, where 905 of 1,148 were byte-identical to their post and had to be deduplicated.
-- **Encoding is clean**: 139 files, zero invalid UTF-8, zero mojibake.
-- Bodies are machine-generated and arrive on a single line, so `ExtractText` is used directly with no unwrapping.
+**goodreads** (`goodreads_library_export*.csv`)
+- Only rows with `My Review` are documents; the rest are shelved books.
+- `Book Id` is the native key.
+- The title is `<book> by <author> <stars>`. The author makes a search for their name find reviews that never mention it; the rating is star glyphs, which the tokeniser drops, so it cannot pollute lexical search. Unrated books get no stars.
+- The date is `Date Read`; a review without one is undated. `Date Added` is never used: it is when the book was shelved. `2012/01/01` on older rows is kept as given.
+- No `RecordCounter`: most rows are unreviewed books, which would trip the quiet-corpus warning on every digest.
 
 ### Document identity
 
-`doc.MakeID` hashes `source + nativeKey`, falling back to `source + content hash` when a format has no native key. Sixteen hex characters, because these get read and grepped by hand.
+`doc.MakeID` hashes `source + nativeKey`, falling back to `source + content hash` when a format has no native key. Sixteen hex characters, because they are read and grepped by hand. For `html` and `text` the key is the relative path. Every document carries `ContentHash`, which lets a re-digest skip unchanged documents.
 
-The tradeoff: `html` and `text` use the relative path as the native key, so fixing a parser bug leaves IDs stable but moving a file changes them. For a keyless source it is the other way round. Every document also carries `ContentHash` regardless, which is what the future dedupe pass will compare.
-
-Duplicates *across* corpora are deliberately left alone. The same essay in three exports gets three IDs, and relating them is a separate pass that has to measure how similar they are rather than assume. Only duplicate IDs *within* one corpus are dropped, which means the export listed something twice.
+Only duplicate IDs *within* a corpus are dropped (`dedupeIDs`). The same writing in two corpora keeps both IDs; `dupes` relates them.
 
 ### Chunking
 
-`doc.Split` splits on paragraph boundaries up to `TargetChars`, breaks an oversized paragraph on sentence ends, and folds a runt tail back into its predecessor. The constants are constants rather than flags because chunk IDs encode the boundaries: a corpus chunked under different constants cannot be added to incrementally, which is what `Manifest.CheckChunking` enforces.
+`doc.Split` splits on paragraphs up to `TargetChars`, breaks oversized paragraphs on sentence ends, and folds a runt tail into its predecessor. The sizes are constants because chunk IDs encode the boundaries; `Manifest.CheckChunking` enforces them.
 
-Search returns **documents**, with the best-matching chunk as the snippet. A document's score is its best chunk's score, not the sum: summing rewards length, so a long essay mentioning the subject five times in passing would outrank a short post entirely about it.
+Search returns documents, scored by their best chunk rather than the sum, so length is not rewarded.
 
 ### Hybrid retrieval
 
-Two retrievers over the same chunks, fused by reciprocal rank. This is not hedging. A proper noun has almost no semantic neighbourhood, so vector search returns everything about politics generally while missing the post that names the person once; an idea is the reverse, since nothing lexical connects "choice" to "branching logic". A tool picking one retriever works on half its queries.
+BM25 and vector search over the same chunks, fused by reciprocal rank. Lexical finds proper nouns, which have no semantic neighbourhood; vectors find ideas with no shared words. RRF is used because the two scores are not comparable.
 
-RRF is used because the two scores are not comparable — BM25 is unbounded, cosine is in [-1, 1] — and throwing the magnitudes away keeps only what both agree on.
+Both retrievers must index the same text, `doc.Indexed`, or a word only in a title is findable one way and not the other. Tokenisation is unstemmed; morphology is the vector half's job.
 
-**Both retrievers must index the same text.** `doc.Indexed` prepends the title to a chunk, and both `digest` (for embedding) and `search.NewEngine` (for BM25) call it. When only the embedder saw titles, a word appearing solely in a title was findable semantically and invisible to keyword search. Two retrievers disagreeing about what text exists is a bug that presents as bad ranking, which is the hardest kind to notice.
+### Dupes
 
-Tokenisation is deliberately unstemmed: the lexical half exists to be literal and catch exactly the queries the vector half is bad at. Morphology is the vector half's job.
+Compares documents across corpora (never within one) dated within ±2 days, by Jaccard over 5-word shingles, threshold 0.5. `ContentHash` is not used: hand-copied text rarely matches byte for byte. Quote characters are folded to ASCII at comparison time only, never upstream of a document ID. Matches are unioned into groups, since the same writing often exists in three corpora. The winner is the highest `priority`, ties broken by corpus name then document ID. The pass only reports; search is unaffected. The constants are fixed because scores fall almost entirely below 0.2 or above 0.5.
+
+### Timeline, export and serve
+
+`timeline.Build` runs dupes and keeps one entry per group (the winner, listing the other copies). Entries are newest first, undated last. The HTML page puts undated writing in its own section at the top, so the bottom of the page is the oldest writing. Long entries collapse behind `<details>`; the corpus filter is pure CSS.
+
+`coroner serve` pre-renders the timeline JSON at `/api/writing.json` and serves the front end at `/`. The front end comes from `internal/webui`, which embeds `internal/webui/dist` only under the `webui` build tag. `make` builds `web/` and sets the tag; a plain `go build` compiles the stub, and `serve` falls back to the static HTML page. `internal/embed` means ollama embeddings, hence the name `webui`.
 
 ### The store
 
@@ -202,64 +170,38 @@ digested/
   <corpus>.docs.jsonl     one Document per line, sorted by ID
   <corpus>.chunks.jsonl   one Chunk per line, sorted by document then index
   <corpus>.vec            chunk vectors, same order as the chunks file
+  writing.html / .json    coroner export output
 ```
 
-One set per corpus, which is what makes digesting incremental — adding a Substack export must not re-embed a Facebook one. Reuse is keyed on `doc.Hash(doc.Indexed(...))`, so an edited title correctly invalidates the vectors of every chunk under it.
-
-JSONL because the corpus should stay greppable; `SetEscapeHTML(false)` for the same reason. Vectors are a small binary format because 768 floats per chunk are not information anyone extracts by eye, and JSON would triple the size. The vector file carries no per-record framing, so `ReadVectors` length-checks against the header — a truncated file must be caught there or it returns garbage.
-
-Everything is written to a temporary name and renamed, so an interrupted digest leaves the previous corpus intact.
-
-Loading is brute force: under ten thousand documents the whole corpus is tens of megabytes. An ANN index would add a persisted structure that can drift out of step with the data it indexes, to solve a problem this corpus does not have.
+One set per corpus, so adding one export never re-embeds another. Vector reuse is keyed on `doc.Hash(doc.Indexed(...))`, so an edited title re-embeds its chunks. JSONL with `SetEscapeHTML(false)` keeps the corpus greppable. `ReadVectors` length-checks against the header because the file has no per-record framing. Writes go to a temporary name and are renamed. Loading is brute force; the corpus is tens of megabytes.
 
 ### Embeddings
 
-Local ollama only. There is no hosted option and no lexical fallback: a silent degrade would mean the same query returning different results depending on whether a daemon was up, which is the class of quiet wrongness everything else here is built to avoid. `-mode=lexical` is the explicit opt-in and the only mode that runs without ollama.
-
-`Probe` runs before any real work, so a run that cannot embed fails before the export is walked rather than after.
-
-`digest.Embedder` is an interface rather than `*embed.Client` specifically so the reproducibility claim can be tested with a deterministic stub. A real model would be testing the wrong thing.
+Local ollama only, with no fallback: a silent degrade would change results depending on whether a daemon was up. `search -mode=lexical` is the explicit opt-in that runs without it. `Probe` runs before any work. `digest.Embedder` is an interface so reproducibility can be tested with a deterministic stub.
 
 ### Logging
 
-`internal/corlog` is hecato's `heclog`, with two fixes to things hecato's own roadmap lists as bugs: the log path resolves via `os.Executable()` rather than `os.Args[0]`, and a failure to open `app.log` warns instead of being fatal, so the tool can be installed somewhere unwritable.
+`internal/corlog` resolves `app.log` via `os.Executable()`, and a failure to open it warns rather than exits. The console gets colour; `app.log` gets identical text with no escape codes (`TestLogFileNeverGetsColorCodes`). Use the semantic helpers, not `color` directly. `search -format=json` and `export -out=-` write only data to stdout.
 
-The dual-output invariant is unchanged and must stay: the console gets colour, `app.log` gets identical text with no escape codes. `TestLogFileNeverGetsColorCodes` guards it. Use the semantic helpers rather than reaching for `color` directly.
+## Build and CI
 
-`search -format=json` writes only JSON to stdout, so it can be piped; the human-facing output still goes to the log.
+`LDFLAGS` inject `main.buildContext` (`"development"` logs to the working directory, anything else beside the executable) and `internal/version.Version`/`.Commit`/`.BuildTime`. The version goes into every digested manifest; the unversioned default is `dev`.
 
-## Build metadata
+- `ci.yml`: gofmt, vet, test, `go test -race` (needs cgo, so it only runs reliably here), and `make all`, which needs node (`web/.nvmrc`).
+- `build_release.yml`: on a `v*.*.*` tag, `make release` and a GitHub Release with both binaries; `workflow_dispatch` builds without publishing. Needs `fetch-depth: 0` for `git describe`.
 
-Four values injected by the Makefile's `LDFLAGS`, all with working defaults under a plain `go build`:
-
-- `main.buildContext` — `"development"` writes `app.log` to the working directory, anything else beside the executable. Unlike hecato this is not a hardcoded machine path, because this is a public repo.
-- `internal/version.Version` / `.Commit` / `.BuildTime` — from `git describe --tags --always --dirty`, `git rev-parse --short HEAD`, and a UTC timestamp. The version is written into every digested manifest, which is why the unversioned default is `dev` rather than something plausible.
-
-## CI
-
-- `ci.yml` — gofmt, vet, test, `go test -race`, and `make all`. The race detector needs cgo and so cannot run on a stock Windows dev box; this is the only place it reliably executes.
-- `build_release.yml` — on a `v*.*.*` tag, builds via `make release` and publishes a GitHub Release with both binaries. `workflow_dispatch` runs the same build and uploads artifacts without publishing, so it is a safe dry run. Needs `fetch-depth: 0` because the Makefile calls `git describe`.
-
-`BINARY_NAME` in the Makefile must stay `coroner`: both workflows reference `coroner` and `coroner.exe` by name.
-
-Unlike hecato, `.gitattributes` pins `*.go` to LF, so `gofmt -l .` is trustworthy locally on Windows rather than listing every file.
-
-## Privacy posture
-
-`source/` and `digested/` are gitignored and must stay that way. The methods are public; the writing is not. Anyone should be able to clone this, point it at their own exports and get the same behaviour, which is also why nothing resolves against a path baked in for one machine.
+`BINARY_NAME` must stay `coroner`: both workflows name `coroner` and `coroner.exe`. `.gitattributes` pins `*.go` to LF, so `gofmt -l .` is trustworthy on Windows.
 
 ## Known rough edges
 
-Present as written — don't treat them as bugs to fix unless asked:
+Present as written; not bugs to fix unless asked:
 
-- An HTML document whose `<h1>` repeats its title shows that title twice: once as the result heading, once at the head of the snippet. The `h1` is genuinely part of the article body, and stripping it heuristically risks removing real text.
-- `Chunk.Start` and `Chunk.End` bracket the untrimmed span, while `Chunk.Text` is trimmed. Offsets locate the chunk; they are not byte-exact against `Text`.
-- `-depth` is exposed on `search` but there is no evaluation set to tune it against, so the default is the only value anyone has a reason to use.
-- Facebook posts carry no URL. The export has `external_context.url` for link shares, but that is the link that was shared rather than a permalink to the post, and putting it in `Document.URL` would imply the wrong thing.
-- Search results show no title line for sources that have no titles. Deliberate — see the comment in `printResults` — but it does mean Facebook results look different from HTML ones.
+- An HTML document whose `<h1>` repeats its title shows the title twice in search results.
+- `Chunk.Start`/`End` bracket the untrimmed span while `Chunk.Text` is trimmed.
+- `search -depth` has no evaluation set to tune it against.
+- Facebook posts carry no URL; the export's `external_context.url` is the shared link, not a permalink.
+- Search results show no title line for untitled sources, so Facebook results look different from HTML ones.
 
-## Roadmap
+## Planned work
 
-Planned work lives in `TODO.md` at the repo root. Check there before proposing new subcommands. It carries the reasoning behind each item as well as the item, which a header comment could not, and it is also where anything Claude needs from Justin — an export not yet handed over, a decision not yet made — is recorded so it survives the end of a session.
-
-All five parsers are written, and `coroner dupes` ships. The near-term item is a viewer: `coroner export` writing a single JSON of documents, dates, snippets and duplicate groups, and a React/Vite front-end reading it. The corpus is private, so whatever is built must make publishing it structurally hard rather than merely discouraged.
+`TODO.md`. Check it before proposing new subcommands. Anything Claude needs from Justin (an export not yet handed over, a decision) goes there too.

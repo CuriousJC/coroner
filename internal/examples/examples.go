@@ -41,11 +41,20 @@ func Print() {
 		{"", "It needs no ollama, since nothing is embedded."},
 	})
 
+	section("Reading everything", []example{
+		{"coroner export", "write digested/writing.html: all of it, newest first"},
+		{"coroner export -format=json", "the same list as JSON"},
+		{"coroner serve", "browse it at http://127.0.0.1:8484, with filtering"},
+		{"", "the same writing in several corpora is listed once, under the copy"},
+		{"", "dupes names as the winner. Neither needs ollama."},
+	})
+
 	section("Looking around", []example{
 		{"coroner sources", "what has been digested, and when"},
 		{"coroner stats", "counts, date histogram, vocabulary"},
 		{"coroner stats -sample=10", "read a few documents spread through a corpus"},
 		{"coroner stats -format=json", "the same numbers, machine-readable"},
+		{"coroner dupes", "the same writing in more than one corpus, and which copy wins"},
 		{"coroner version", "build metadata"},
 		{"", "stats is how you check a corpus parsed properly: a gap in the year"},
 		{"", "histogram or a suspiciously tight word count is a parser problem"},
