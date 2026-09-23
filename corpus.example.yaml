@@ -5,11 +5,12 @@
 # a digest that depends on walk order is not reproducible.
 
 # Which parser reads this export.
-#   facebook  a Facebook "Download your information" export
-#   substack  a Substack export: posts.csv plus posts/*.html
-#   html      loose HTML files
-#   htmlsite  a hand-built HTML site: <h1> title, dated filenames
-#   text      loose .txt or .md files
+#   facebook   a Facebook "Download your information" export
+#   substack   a Substack export: posts.csv plus posts/*.html
+#   goodreads  a Goodreads library export: the reviews in its CSV
+#   html       loose HTML files
+#   htmlsite   a hand-built HTML site: <h1> title, dated filenames
+#   text       loose .txt or .md files
 type: html
 
 # This corpus's stable identity. It is part of every document ID and it names

@@ -1,0 +1,270 @@
+:root {
+  --bg: #fbfaf7;
+  --fg: #1f1d1a;
+  --muted: #6b665e;
+  --rule: #e4e0d8;
+  --card: #ffffff;
+  --accent: #8a4b1f;
+  --badge-0: #e8d9c6;
+  --badge-1: #d6e3d3;
+  --badge-2: #d8dcec;
+  --badge-3: #eed6d6;
+  --badge-4: #e6e1c4;
+  --badge-5: #d9e6e6;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171614;
+    --fg: #e8e4dc;
+    --muted: #9a948a;
+    --rule: #2e2b27;
+    --card: #1f1d1a;
+    --accent: #e0a36f;
+    --badge-0: #4a3b2a;
+    --badge-1: #2f4230;
+    --badge-2: #323852;
+    --badge-3: #4d2f2f;
+    --badge-4: #464126;
+    --badge-5: #2c4545;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 17px/1.55 Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+a {
+  color: var(--accent);
+}
+
+.wrap {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.notice {
+  color: var(--muted);
+  padding: 3rem 0;
+}
+
+header.top {
+  padding: 2.5rem 0 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+h1 {
+  font-size: 2rem;
+  margin: 0 0 0.25rem;
+  font-weight: normal;
+}
+
+.summary,
+.showing {
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.controls,
+.sources,
+nav.years,
+.meta,
+.copies,
+.showing,
+button {
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.controls input[type="search"] {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+}
+
+.order {
+  display: flex;
+}
+
+.order button {
+  border: 1px solid var(--rule);
+  background: var(--card);
+  color: var(--fg);
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+}
+
+.order button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.order button:last-child {
+  border-radius: 0 6px 6px 0;
+  border-left: 0;
+}
+
+.order button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.sources label {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.n {
+  color: var(--muted);
+}
+
+nav.years {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.7rem;
+  line-height: 1.6;
+}
+
+nav.years a {
+  text-decoration: none;
+}
+
+nav.years span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+section.year > h2 {
+  font-size: 1.6rem;
+  font-weight: normal;
+  margin: 2.5rem 0 0.5rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* Six thousand entries: let the browser skip laying out months off screen. */
+section.month {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1200px;
+}
+
+section.month > h3 {
+  font: 600 13px/1 system-ui, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 1.75rem 0 0.5rem;
+}
+
+.entry {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.entry:target {
+  border-color: var(--accent);
+}
+
+.meta {
+  color: var(--muted);
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.badge {
+  color: var(--fg);
+  padding: 0 0.4rem;
+  border-radius: 3px;
+}
+
+.b0 { background: var(--badge-0); }
+.b1 { background: var(--badge-1); }
+.b2 { background: var(--badge-2); }
+.b3 { background: var(--badge-3); }
+.b4 { background: var(--badge-4); }
+.b5 { background: var(--badge-5); }
+
+.entry h4 {
+  font-size: 1.05rem;
+  margin: 0.3rem 0 0;
+}
+
+.text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 0.4rem;
+}
+
+button.more {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-top: 0.3rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.copies {
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
+footer {
+  color: var(--muted);
+  padding: 2rem 0 5rem;
+  border-top: 1px solid var(--rule);
+  margin-top: 2.5rem;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+
+nav.jump {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+nav.jump button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--rule);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 18px;
+  cursor: pointer;
+}

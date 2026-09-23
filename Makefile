@@ -20,11 +20,17 @@ LDFLAGS = -X main.buildContext=$(BUILD_CONTEXT) \
 
 all: build-linux build-windows
 
-build-linux:
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) $(MAIN_PATH)
+# The front end, built into internal/webui/dist and compiled in by the webui
+# tag. A plain `go build` skips both and `coroner serve` falls back to the
+# static timeline page.
+web:
+	cd web && npm ci && npm run build
 
-build-windows:
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME).exe $(MAIN_PATH)
+build-linux: web
+	GOOS=linux GOARCH=amd64 go build -tags webui -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) $(MAIN_PATH)
+
+build-windows: web
+	GOOS=windows GOARCH=amd64 go build -tags webui -ldflags "$(LDFLAGS)" -o $(BINARY_NAME).exe $(MAIN_PATH)
 
 # What CI builds. Same targets, but the binaries log beside themselves.
 release:
@@ -32,6 +38,7 @@ release:
 
 clean:
 	rm -f $(BINARY_NAME) $(BINARY_NAME).exe
+	rm -rf internal/webui/dist
 
 test:
 	go test ./...
@@ -39,4 +46,4 @@ test:
 vet:
 	go vet ./...
 
-.PHONY: all build-linux build-windows release clean test vet
+.PHONY: all web build-linux build-windows release clean test vet

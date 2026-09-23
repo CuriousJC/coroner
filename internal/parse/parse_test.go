@@ -26,7 +26,7 @@ func parseOne(t *testing.T, p Parser, rel, body string) []struct {
 func TestTypesAreRegistered(t *testing.T) {
 	types := Types()
 
-	want := map[string]bool{"text": true, "html": true, "facebook": true, "substack": true}
+	want := map[string]bool{"text": true, "html": true, "htmlsite": true, "facebook": true, "substack": true, "goodreads": true}
 	for _, ty := range types {
 		delete(want, ty)
 	}
@@ -58,6 +58,9 @@ func TestImplementedDistinguishesPendingParsers(t *testing.T) {
 	}
 	if !Implemented("substack") {
 		t.Error("substack should be implemented")
+	}
+	if !Implemented("goodreads") {
+		t.Error("goodreads should be implemented")
 	}
 	if Implemented("nonsense") {
 		t.Error("an unregistered type reported as implemented")

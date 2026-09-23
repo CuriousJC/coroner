@@ -61,11 +61,12 @@ type Parser interface {
 // than shared, so that whatever Prepare caches belongs to one digest and cannot
 // leak between corpora.
 var constructors = map[string]func() Parser{
-	"text":     func() Parser { return &textParser{} },
-	"html":     func() Parser { return &htmlParser{} },
-	"htmlsite": func() Parser { return &htmlsiteParser{} },
-	"facebook": func() Parser { return &facebookParser{} },
-	"substack": func() Parser { return &substackParser{} },
+	"text":      func() Parser { return &textParser{} },
+	"html":      func() Parser { return &htmlParser{} },
+	"htmlsite":  func() Parser { return &htmlsiteParser{} },
+	"facebook":  func() Parser { return &facebookParser{} },
+	"substack":  func() Parser { return &substackParser{} },
+	"goodreads": func() Parser { return &goodreadsParser{} },
 }
 
 // Link is one outbound link an export recorded, with whatever the author wrote

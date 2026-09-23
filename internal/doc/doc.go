@@ -61,9 +61,8 @@ type Document struct {
 	// from here without needing the original exports at all.
 	Text string `json:"text"`
 
-	// ContentHash is sha256 of Text. This is what the dedupe pass compares, and
-	// what lets a re-digest tell an unchanged document from an edited one and
-	// skip re-embedding it.
+	// ContentHash is sha256 of Text: what lets a re-digest tell an unchanged
+	// document from an edited one and skip re-embedding it.
 	ContentHash string `json:"content_hash"`
 
 	Words int `json:"words"`

@@ -2,21 +2,32 @@
 
 Digest bodies of writing into one searchable corpus, then search it by idea rather than by keyword.
 
-Point it at exports of things you have written — a Facebook archive, a Substack export, a folder of HTML — and it turns them into a single indexed corpus. Then ask it about a concept. Searching for `choice` should also surface the essay about branching logic that never uses the word.
+Point it at exports of things you have written — a Facebook archive, a Substack export, your Goodreads reviews, a folder of HTML — and it turns them into a single indexed corpus. Then ask it about a concept. Searching for `choice` should also surface the essay about branching logic that never uses the word.
 
 Your writing never leaves your machine: embeddings are computed by a local [ollama](https://ollama.com).
 
 ## Status
 
-Working end to end for `facebook`, `html` and `text` sources. The `substack` parser is registered but not yet written — it is waiting on a real export to be written against rather than guessed at.
+Six source types, all working end to end:
 
-The Facebook parser was built against a real 8,195-record export and handles the things that export actually does: no post identifiers, captions stored twice, and text that arrives double-encoded so `don't` reads as `donâ€™t`.
+| type | reads |
+| --- | --- |
+| `facebook` | a Facebook "Download your information" export — the `your_posts*.json` files |
+| `substack` | a Substack export — `posts.csv` plus `posts/*.html`, published posts only |
+| `goodreads` | a Goodreads library export — the reviews in `goodreads_library_export.csv` |
+| `htmlsite` | a hand-built HTML site — `<h1>` titles, dates in the filenames |
+| `html` | loose HTML files |
+| `text` | loose `.txt` or `.md` files |
+
+The format-specific parsers handle what those exports actually do. Facebook has no post identifiers, stores captions twice, and double-encodes its text so `don't` reads as `donâ€™t`. Substack keeps subscriber analytics beside the posts, so the parser reads a narrow allowlist and none of them can end up indexed. Goodreads records no date for a review, so a review is dated by when the book was read, and each one is titled with the book, its author and your star rating.
 
 ## Install
 
 ```bash
-go build -o coroner cmd/coroner/main.go
+make all      # needs Go and node; builds the browser viewer into the binary
 ```
+
+`go build -o coroner cmd/coroner/main.go` also works and needs only Go; `coroner serve` then shows the static page instead of the full viewer.
 
 You will also need ollama, with an embedding model pulled:
 
@@ -42,11 +53,30 @@ coroner search "the cost of certainty" -format=json
 
 coroner sources     # what has been digested
 coroner stats       # counts, date histogram, vocabulary
+coroner dupes       # the same writing in more than one export
 coroner examples    # worked usage for everything
+
+# Everything you wrote, in one place
+coroner export      # digested/writing.html, newest first
+coroner serve       # the same, browsable at http://127.0.0.1:8484
 
 # Every link you shared, with what you said about it
 coroner links -source=source/facebook
 ```
+
+## Finding the same writing twice
+
+Writing gets copied between platforms: a review cross-posted to Facebook, a Facebook post tidied up for a blog, a blog post revised for Substack. `coroner dupes` finds those copies across corpora and names which one it treats as the real one.
+
+It compares documents dated within two days of each other by how many five-word runs they share, not by exact hash, because hand-copied text almost never survives byte for byte. Which copy wins comes from a `priority` in each corpus's `corpus.yaml`, with the higher number winning. The pass only reports: search results are never filtered or hidden because of it.
+
+## Reading everything
+
+`coroner export` writes every piece of writing in the corpus to one HTML file, newest first, so the bottom of the page is the first thing you wrote and scrolling up reads forward in time. Long pieces show their opening and expand on a click. Writing that exists in more than one export is listed once, under the copy `dupes` picks, with a note of where else it appears. `-format=json` writes the same list as JSON.
+
+The page is a single file that loads nothing from anywhere, and it is written into `digested/` by default because it holds the whole corpus.
+
+`coroner serve` shows the same list in the browser with filtering by words and by corpus, and either order. It listens on loopback only and answers only requests addressed to it by a loopback name, so nothing else on the network, and no other website open in your browser, can read it.
 
 ## Links are not part of the corpus
 

@@ -23,6 +23,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # `make` builds the front end in web/ before compiling it in.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: test
         run: go test ./...
 

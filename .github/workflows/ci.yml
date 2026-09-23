@@ -4,12 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Lets a run be started by hand. Added after a GitHub Actions outage on
-  # 2026-08-06 swallowed three pushes in a row, leaving commits on main that CI
-  # had never seen and no way to run the missed checks short of inventing a
-  # dummy commit. The race detector only ever runs here, because it needs cgo
-  # and will not run on a stock Windows box, so checks that get skipped stay
-  # skipped until something reruns them.
+  # Lets a run be started by hand, for when a trigger is missed.
   workflow_dispatch:
 
 jobs:
@@ -22,6 +17,13 @@ jobs:
         with:
           # Read from go.mod so there is no second version to keep in sync.
           go-version-file: go.mod
+
+      # `make` builds the front end in web/ before compiling it in.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: gofmt
         run: |
