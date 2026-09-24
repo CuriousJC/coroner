@@ -19,7 +19,7 @@ Six source types, all working end to end:
 | `html` | loose HTML files |
 | `text` | loose `.txt` or `.md` files |
 
-The format-specific parsers handle what those exports actually do. Facebook has no post identifiers, stores captions twice, and double-encodes its text so `don't` reads as `donâ€™t`. Substack keeps subscriber analytics beside the posts, so the parser reads a narrow allowlist and none of them can end up indexed. Goodreads records no date for a review, so a review is dated by when the book was read, and each one is titled with the book, its author and your star rating.
+The format-specific parsers handle what those exports actually do. Facebook has no post identifiers, stores captions twice, and double-encodes its text so `don't` reads as `donâ€™t`. Substack keeps subscriber analytics beside the posts, so the parser reads a narrow allowlist and none of them can end up indexed. Goodreads records no date for a review, so a review is dated by when the book was read (or 2012-01-01, Goodreads' own placeholder for old reads, when there is no read date), and each one is titled with the book, its author and your star rating.
 
 ## Install
 
@@ -74,9 +74,11 @@ It compares documents dated within two days of each other by how many five-word 
 
 `coroner export` writes every piece of writing in the corpus to one HTML file, newest first, so the bottom of the page is the first thing you wrote and scrolling up reads forward in time. Long pieces show their opening and expand on a click. Writing that exists in more than one export is listed once, under the copy `dupes` picks, with a note of where else it appears. `-format=json` writes the same list as JSON.
 
+Checkboxes filter by corpus, by length (under 250 words, 250 to 999, 1,000 or more), and whether to show quotes: short posts that are someone else's words with an attribution such as `~ Seneca`, flagged when the corpus is digested.
+
 The page is a single file that loads nothing from anywhere, and it is written into `digested/` by default because it holds the whole corpus.
 
-`coroner serve` shows the same list in the browser with filtering by words and by corpus, and either order. It listens on loopback only and answers only requests addressed to it by a loopback name, so nothing else on the network, and no other website open in your browser, can read it.
+`coroner serve` shows the same list in the browser with the same checkboxes, filtering by words, and either order. It listens on loopback only and answers only requests addressed to it by a loopback name, so nothing else on the network, and no other website open in your browser, can read it.
 
 ## Links are not part of the corpus
 

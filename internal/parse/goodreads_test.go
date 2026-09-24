@@ -142,7 +142,7 @@ func TestGoodreadsTextIsOnlyTheReview(t *testing.T) {
 
 // Date Read is the nearest thing the export has to a review date. Date Added is
 // when the book was shelved, often years earlier, so a review with no Date Read
-// carries no date rather than that one.
+// joins Goodreads' own 2012-01-01 placeholder rather than taking that date.
 func TestGoodreadsDatesFromDateReadNeverDateAdded(t *testing.T) {
 	read := sampleRow()
 
@@ -165,8 +165,9 @@ func TestGoodreadsDatesFromDateReadNeverDateAdded(t *testing.T) {
 	if p := byKey["1000001"].Published; !p.Equal(want) {
 		t.Errorf("published = %s, want Date Read %s", p, want)
 	}
-	if p := byKey["1000003"].Published; !p.IsZero() {
-		t.Errorf("a review with no Date Read was dated %s; Date Added must not stand in", p)
+	placeholder := time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+	if p := byKey["1000003"].Published; !p.Equal(placeholder) {
+		t.Errorf("a review with no Date Read was dated %s, want %s; Date Added must not stand in", p, placeholder)
 	}
 }
 

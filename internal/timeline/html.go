@@ -24,7 +24,7 @@ func (t Timeline) JSON(w io.Writer) error {
 //
 // The page loads nothing -- no script, no font, no stylesheet from anywhere --
 // because it holds the whole private corpus and must not reach out when opened.
-// The corpus filter is pure CSS for the same reason.
+// The corpus, length and quote filters are pure CSS for the same reason.
 func (t Timeline) HTML(w io.Writer) error {
 	return page.Execute(w, t.view())
 }
@@ -39,6 +39,8 @@ const (
 
 type pageView struct {
 	Sources []Source
+	Lengths []lengthView
+	Quotes  int
 	Undated []entryView
 	Years   []yearView
 	Entries int
@@ -46,6 +48,18 @@ type pageView struct {
 	Newest  string
 	Oldest  string
 	CSS     template.CSS
+}
+
+type lengthView struct {
+	Name  string
+	Label string
+	Count int
+}
+
+var lengthLabels = map[string]string{
+	Short:  "under 250 words",
+	Medium: "250 to 999",
+	Long:   "1,000 or more",
 }
 
 type yearView struct {
@@ -75,6 +89,17 @@ type copyView struct {
 func (t Timeline) view() pageView {
 	v := pageView{Sources: t.Sources, Entries: len(t.Entries), Folded: t.Folded}
 
+	counts := map[string]int{}
+	for _, e := range t.Entries {
+		counts[e.Length]++
+		if e.Quote {
+			v.Quotes++
+		}
+	}
+	for _, l := range Lengths {
+		v.Lengths = append(v.Lengths, lengthView{Name: l, Label: lengthLabels[l], Count: counts[l]})
+	}
+
 	for _, e := range t.Undated() {
 		v.Undated = append(v.Undated, entryViewOf(e))
 	}
@@ -100,7 +125,7 @@ func (t Timeline) view() pageView {
 		yv.Count++
 	}
 
-	v.CSS = sourceCSS(t.Sources)
+	v.CSS = filterCSS(t.Sources)
 	return v
 }
 
@@ -142,18 +167,24 @@ func preview(s string) string {
 // properties so light and dark mode each define their own.
 const badgeColours = 6
 
-// sourceCSS is the per-corpus part of the stylesheet: a badge colour, and the
-// rule that hides a corpus when its checkbox is cleared.
+// filterCSS is the generated part of the stylesheet: a badge colour per corpus,
+// and the rules that hide a corpus, a length bucket or quotes when its checkbox
+// is cleared.
 //
 // Built here rather than in the template because it is CSS generated from data.
 // Corpus names are restricted to [a-z0-9_-] by the manifest validator, so they
-// are safe as class names and IDs without escaping.
-func sourceCSS(sources []Source) template.CSS {
+// are safe as class names and IDs without escaping. Corpus checkboxes are
+// f-<name>; the others are fl-<length> and fq, which no corpus ID can match.
+func filterCSS(sources []Source) template.CSS {
 	var b strings.Builder
 	for i, s := range sources {
 		fmt.Fprintf(&b, ".s-%s .src{background:var(--badge-%d)}\n", s.Name, i%badgeColours)
 		fmt.Fprintf(&b, "body:has(#f-%s:not(:checked)) .s-%s{display:none}\n", s.Name, s.Name)
 	}
+	for _, l := range Lengths {
+		fmt.Fprintf(&b, "body:has(#fl-%s:not(:checked)) .l-%s{display:none}\n", l, l)
+	}
+	b.WriteString("body:has(#fq:not(:checked)) .q{display:none}\n")
 	return template.CSS(b.String())
 }
 
@@ -237,6 +268,10 @@ footer { color: var(--muted); padding: 2rem 0 4rem; border-top: 1px solid var(--
 <fieldset class="filters"><legend>Show</legend>
 {{range .Sources}}<label><input type="checkbox" id="f-{{.Name}}" checked> {{.Name}} <span class="n">{{comma .Entries}}</span></label>
 {{end}}</fieldset>
+<fieldset class="filters"><legend>Length</legend>
+{{range .Lengths}}<label><input type="checkbox" id="fl-{{.Name}}" checked> {{.Label}} <span class="n">{{comma .Count}}</span></label>
+{{end}}{{if .Quotes}}<label><input type="checkbox" id="fq" checked> quotes <span class="n">{{comma .Quotes}}</span></label>
+{{end}}</fieldset>
 <nav class="years">{{if .Undated}}<a href="#undated">undated</a>{{end}}{{range .Years}}<a href="#y{{.Year}}">{{.Year}} <span>{{comma .Count}}</span></a>{{end}}</nav>
 </header>
 <main>
@@ -251,7 +286,7 @@ footer { color: var(--muted); padding: 2rem 0 4rem; border-top: 1px solid var(--
 </div>
 </body>
 </html>
-{{define "entry"}}<article class="e s-{{.Source}}" id="d-{{.ID}}">
+{{define "entry"}}<article class="e s-{{.Source}} l-{{.Length}}{{if .Quote}} q{{end}}" id="d-{{.ID}}">
 <div class="meta">{{if .Date}}<time datetime="{{.Date}}">{{.Date}}</time>{{end}}<span class="src">{{.Source}}</span><span>{{comma .Words}} words</span></div>
 {{if .Title}}<h4>{{if .URL}}<a href="{{.URL}}" rel="noreferrer noopener">{{.Title}}</a>{{else}}{{.Title}}{{end}}</h4>{{end}}
 {{if .Long}}<details><summary><span class="text preview">{{.Preview}}</span><span class="more">Read all {{comma .Words}} words</span></summary><div class="text">{{.Text}}</div></details>{{else}}<div class="text">{{.Text}}</div>{{end}}

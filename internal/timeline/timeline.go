@@ -55,6 +55,11 @@ type Entry struct {
 	Words     int       `json:"words"`
 	Text      string    `json:"text"`
 
+	// Length is the entry's LengthOf bucket, sent so the front end filters on
+	// the same boundaries as the static page.
+	Length string `json:"length"`
+	Quote  bool   `json:"quote,omitempty"`
+
 	// Copies are the same writing in other corpora, strongest match first.
 	Copies []Copy `json:"copies,omitempty"`
 }
@@ -155,7 +160,31 @@ func entryOf(d *doc.Document, cs []Copy) Entry {
 		Published: d.Published,
 		Words:     d.Words,
 		Text:      d.Text,
+		Length:    LengthOf(d.Words),
+		Quote:     d.Quote,
 		Copies:    cs,
+	}
+}
+
+// Length buckets, filterable on both the static page and the front end.
+const (
+	Short  = "short"
+	Medium = "medium"
+	Long   = "long"
+)
+
+// Lengths is every bucket, shortest first.
+var Lengths = []string{Short, Medium, Long}
+
+// LengthOf buckets a word count: under 250, 250 to 999, and 1,000 or more.
+func LengthOf(words int) string {
+	switch {
+	case words < 250:
+		return Short
+	case words < 1000:
+		return Medium
+	default:
+		return Long
 	}
 }
 

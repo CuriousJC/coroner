@@ -23,8 +23,13 @@ export interface Entry {
   published?: string;
   words: number;
   text: string;
+  length: Length;
+  quote?: boolean;
   copies?: Copy[];
 }
+
+// timeline.LengthOf's buckets: under 250 words, 250 to 999, 1,000 or more.
+export type Length = "short" | "medium" | "long";
 
 export interface Timeline {
   sources: Source[];

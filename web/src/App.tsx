@@ -1,11 +1,18 @@
 import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
-import type { Entry, Timeline } from "./types";
+import type { Entry, Length, Timeline } from "./types";
 
 // How much of a long entry shows before it is expanded, and the length past
 // which an entry is collapsed at all. Matches the static page.
 const PREVIEW = 500;
 const LONG = 1000;
 const BADGES = 6;
+
+// Labels for the length buckets, shortest first. Matches the static page.
+const LENGTHS: [Length, string][] = [
+  ["short", "under 250 words"],
+  ["medium", "250 to 999"],
+  ["long", "1,000 or more"],
+];
 
 type Order = "newest" | "oldest";
 
@@ -26,6 +33,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const [hiddenLengths, setHiddenLengths] = useState<ReadonlySet<Length>>(new Set());
+  const [hideQuotes, setHideQuotes] = useState(false);
   const [order, setOrder] = useState<Order>("newest");
   const deferredQuery = useDeferredValue(query);
 
@@ -49,8 +58,24 @@ export function App() {
   const visible = useMemo(() => {
     if (!data) return [];
     const q = deferredQuery.trim().toLowerCase();
-    return data.entries.filter((e, i) => !hidden.has(e.source) && (!q || haystack[i].includes(q)));
-  }, [data, haystack, hidden, deferredQuery]);
+    return data.entries.filter(
+      (e, i) =>
+        !hidden.has(e.source) &&
+        !hiddenLengths.has(e.length) &&
+        !(hideQuotes && e.quote) &&
+        (!q || haystack[i].includes(q)),
+    );
+  }, [data, haystack, hidden, hiddenLengths, hideQuotes, deferredQuery]);
+
+  const counts = useMemo(() => {
+    const lengths: Record<string, number> = {};
+    let quotes = 0;
+    for (const e of data?.entries ?? []) {
+      lengths[e.length] = (lengths[e.length] ?? 0) + 1;
+      if (e.quote) quotes++;
+    }
+    return { lengths, quotes };
+  }, [data]);
 
   const { undated, years } = useMemo(() => group(visible, order), [visible, order]);
 
@@ -81,13 +106,8 @@ export function App() {
   const newest = dated.length ? day(dated[0].published!) : "";
   const oldest = dated.length ? day(dated[dated.length - 1].published!) : "";
 
-  const toggle = (name: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+  const toggle = (name: string) => setHidden((prev) => flip(prev, name));
+  const toggleLength = (l: Length) => setHiddenLengths((prev) => flip(prev, l));
 
   const undatedSection =
     undated.length > 0 ? (
@@ -138,6 +158,21 @@ export function App() {
               <span className="n">{s.entries.toLocaleString()}</span>
             </label>
           ))}
+        </div>
+
+        <div className="sources">
+          {LENGTHS.map(([l, label]) => (
+            <label key={l}>
+              <input type="checkbox" checked={!hiddenLengths.has(l)} onChange={() => toggleLength(l)} /> {label}{" "}
+              <span className="n">{(counts.lengths[l] ?? 0).toLocaleString()}</span>
+            </label>
+          ))}
+          {counts.quotes > 0 && (
+            <label>
+              <input type="checkbox" checked={!hideQuotes} onChange={() => setHideQuotes(!hideQuotes)} /> quotes{" "}
+              <span className="n">{counts.quotes.toLocaleString()}</span>
+            </label>
+          )}
         </div>
 
         <nav className="years">
@@ -257,6 +292,13 @@ function group(entries: Entry[], order: Order): { undated: Entry[]; years: Year[
     year.count++;
   }
   return { undated, years };
+}
+
+function flip<T>(set: ReadonlySet<T>, item: T): ReadonlySet<T> {
+  const next = new Set(set);
+  if (next.has(item)) next.delete(item);
+  else next.add(item);
+  return next;
 }
 
 // Dates arrive in UTC and are shown as UTC days, the same as every other

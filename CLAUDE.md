@@ -131,7 +131,7 @@ Formats: `text`, `html`, `htmlsite`, `facebook`, `substack`, `goodreads`. A pars
 - Only rows with `My Review` are documents; the rest are shelved books.
 - `Book Id` is the native key.
 - The title is `<book> by <author> <stars>`. The author makes a search for their name find reviews that never mention it; the rating is star glyphs, which the tokeniser drops, so it cannot pollute lexical search. Unrated books get no stars.
-- The date is `Date Read`; a review without one is undated. `Date Added` is never used: it is when the book was shelved. `2012/01/01` on older rows is kept as given.
+- The date is `Date Read`. `2012/01/01` on older rows is Goodreads' own placeholder for books read before it tracked dates, and is kept as given; a review with no `Date Read` gets the same date, so it sits with them rather than in an undated section. `Date Added` is never used: it is when the book was shelved.
 - No `RecordCounter`: most rows are unreviewed books, which would trip the quiet-corpus warning on every digest.
 
 ### Document identity
@@ -139,6 +139,10 @@ Formats: `text`, `html`, `htmlsite`, `facebook`, `substack`, `goodreads`. A pars
 `doc.MakeID` hashes `source + nativeKey`, falling back to `source + content hash` when a format has no native key. Sixteen hex characters, because they are read and grepped by hand. For `html` and `text` the key is the relative path. Every document carries `ContentHash`, which lets a re-digest skip unchanged documents.
 
 Only duplicate IDs *within* a corpus are dropped (`dedupeIDs`). The same writing in two corpora keeps both IDs; `dupes` relates them.
+
+### Quotes
+
+`Document.Quote` marks a short post that is someone else's words with a trailing attribution. `doc.New` sets it from `doc.IsQuote`, so every parser gets it and a re-digest re-applies the rule to every corpus. It is a heuristic over the text: under 100 words, with the attribution on the last line after a tilde (`~ Seneca`), or after a dash that follows closing punctuation (`truth." - Niels Bohr`). A trailing link turns a dash, or a long tilde tail, into an article title rather than an author. It is not part of the ID, the hash or the indexed text, so changing the rule re-embeds nothing.
 
 ### Chunking
 
@@ -158,7 +162,7 @@ Compares documents across corpora (never within one) dated within ±2 days, by J
 
 ### Timeline, export and serve
 
-`timeline.Build` runs dupes and keeps one entry per group (the winner, listing the other copies). Entries are newest first, undated last. The HTML page puts undated writing in its own section at the top, so the bottom of the page is the oldest writing. Long entries collapse behind `<details>`; the corpus filter is pure CSS.
+`timeline.Build` runs dupes and keeps one entry per group (the winner, listing the other copies). Entries are newest first, undated last. The HTML page puts undated writing in its own section at the top, so the bottom of the page is the oldest writing. Long entries collapse behind `<details>`. The corpus, length and quote filters are pure CSS on the page and state in the front end. Length buckets come from `timeline.LengthOf` (under 250 words, 250 to 999, 1,000 or more) and travel in the JSON, so both use the same boundaries.
 
 `coroner serve` pre-renders the timeline JSON at `/api/writing.json` and serves the front end at `/`. The front end comes from `internal/webui`, which embeds `internal/webui/dist` only under the `webui` build tag. `make` builds `web/` and sets the tag; a plain `go build` compiles the stub, and `serve` falls back to the static HTML page. `internal/embed` means ollama embeddings, hence the name `webui`.
 
