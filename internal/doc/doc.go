@@ -66,6 +66,10 @@ type Document struct {
 	ContentHash string `json:"content_hash"`
 
 	Words int `json:"words"`
+
+	// Quote marks a short post that is someone else's words with an
+	// attribution. See IsQuote.
+	Quote bool `json:"quote,omitempty"`
 }
 
 // Chunk is a passage of a document, and the unit that actually gets embedded
@@ -209,6 +213,7 @@ func New(source, sourceType, nativeKey, file string, d Document) Document {
 	d.ContentHash = Hash(d.Text)
 	d.ID = MakeID(source, nativeKey, d.ContentHash)
 	d.Words = len(strings.Fields(d.Text))
+	d.Quote = IsQuote(d.Text, d.Words)
 
 	if !d.Published.IsZero() {
 		d.Published = d.Published.UTC()

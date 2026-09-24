@@ -209,3 +209,52 @@ func TestPreviewCutsAtAWord(t *testing.T) {
 		t.Errorf("preview is %d runes, want at most %d", n, previewRunes+1)
 	}
 }
+
+func TestLengthOfBuckets(t *testing.T) {
+	tests := []struct {
+		words int
+		want  string
+	}{
+		{0, Short}, {249, Short}, {250, Medium}, {999, Medium}, {1000, Long}, {50000, Long},
+	}
+	for _, tc := range tests {
+		if got := LengthOf(tc.words); got != tc.want {
+			t.Errorf("LengthOf(%d) = %q, want %q", tc.words, got, tc.want)
+		}
+	}
+}
+
+// Each entry carries its length bucket and quote flag as classes, and the page
+// has a checkbox and a hiding rule for each, so the filters work without script.
+func TestHTMLFiltersByLengthAndQuote(t *testing.T) {
+	corpora, man := fixture()
+	corpora[0].Docs = append(corpora[0].Docs,
+		document("facebook", "fb3", "", on(2020, 5, 1), "If you would judge, understand. ~ Seneca"))
+
+	tl := Build(corpora, man)
+	for _, e := range tl.Entries {
+		if want := LengthOf(e.Words); e.Length != want {
+			t.Errorf("entry %s has length %q, want %q", e.ID, e.Length, want)
+		}
+	}
+
+	var b bytes.Buffer
+	if err := tl.HTML(&b); err != nil {
+		t.Fatal(err)
+	}
+	page := b.String()
+
+	for _, want := range []string{
+		`class="e s-facebook l-short q"`,
+		`id="fl-short"`, `id="fl-medium"`, `id="fl-long"`, `id="fq"`,
+		`body:has(#fl-short:not(:checked)) .l-short{display:none}`,
+		`body:has(#fq:not(:checked)) .q{display:none}`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page is missing %s", want)
+		}
+	}
+	if n := strings.Count(page, " q\""); n != 1 {
+		t.Errorf("%d entries are marked as quotes, want 1", n)
+	}
+}

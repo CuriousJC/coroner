@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/net/html"
 
@@ -96,9 +97,8 @@ func (p *goodreadsParser) ParseFile(src Source, rel string, data []byte) ([]doc.
 			// The export records no date for the review itself. Date Read is the
 			// nearest thing, and agrees with the review's Facebook cross-post
 			// when there is one. Date Added is when the book was shelved, often
-			// years earlier, so a review with no Date Read carries no date rather
-			// than that one.
-			Published: parseTime(field(row, "Date Read")),
+			// years earlier, so it never stands in. See goodreadsUndated.
+			Published: goodreadsDate(field(row, "Date Read")),
 
 			// No URL: the export has no review permalink, and the book's page is
 			// not this document.
@@ -112,6 +112,18 @@ func (p *goodreadsParser) ParseFile(src Source, rel string, data []byte) ([]doc.
 	}
 
 	return out, nil
+}
+
+// goodreadsUndated dates a review with no Date Read. Goodreads itself writes
+// 2012/01/01 as the Date Read of books read before it tracked dates, so a
+// review with none joins those instead of standing apart as undated.
+var goodreadsUndated = time.Date(2012, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func goodreadsDate(read string) time.Time {
+	if t := parseTime(read); !t.IsZero() {
+		return t
+	}
+	return goodreadsUndated
 }
 
 // goodreadsText renders a review's markup as plain text. Reviews are HTML
